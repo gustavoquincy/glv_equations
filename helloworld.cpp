@@ -1,4 +1,5 @@
-#include "myfunctions.h"
+#include "myfunctions.hpp"
+
 int main()
 {
     helloworld();

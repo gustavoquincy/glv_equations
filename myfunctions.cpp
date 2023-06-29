@@ -1,5 +1,6 @@
 #include <iostream>
-#include "myfunctions.h"
+#include "myfunctions.hpp"
+
 int helloworld()
 {
     std::cout << "Hello World! Edited message" << std::endl;
