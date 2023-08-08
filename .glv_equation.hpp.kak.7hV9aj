@@ -6,8 +6,10 @@
 #include <boost/numeric/odeint/external/thrust/thrust.hpp>
 
 #include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <thrust/reduce.h>
 #include <thrust/functional.h>
+#include <thrust/iterator/zip_iterator.h>
 
 #include "pcg_random.hpp"
 //using pcg c++ implementation, pcg64
