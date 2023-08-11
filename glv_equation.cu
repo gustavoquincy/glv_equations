@@ -21,19 +21,28 @@ struct generalized_lotka_volterra_system
     {
         void operator( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, interaction column } */
         {   
-            interaction[]
-            state_type result = thrust::copy_if( )
-            
+            thrust::device_vector<value_type> result( m_num_species );
+            thrust::transform( y.begin(), y.end(), thrust::get<4>(t).begin(), result.begin(), thrust::multiplies<value_type>());
+            thrust::device_vector<value_type> copy_result( m_num_species );
+            thrust::fill( copy_result.begin(), copy_result.end(), 0);
+            thrust::copy_if( result.begin(), result.end(), copy_result.begin(), larger_than_zero());
+            value_type m_pos_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0 );
+            thrust::fill( copy_result.begin(), copy_result.end(), 0);
+            thrust::copy_if( result.begin(), result.end(), copy_result.begin(), !larger_than_zero());
+            value_type m_neg_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0 );
             thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + m_neg_sum + thrust::get<3>(t) * m_pos_sum / ( 1 + m_pos_sum )) - m_dilution * thrust::get<0>(t);
         }
     }
 
-    void operator ( state_type &y , state_type &dydt, state_type growth_rate, state_type Sigma, matrix_type interaction, value_type dilution )
+    generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species );
+
+
+    void operator ( state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction )
     {
 
         thrust::for_each(
-                thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin() ) ),
-                thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end() ) ),
+                thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate.begin(), Sigma.begin(), interaction.begin() ) ),
+                thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate.end(), Sigma.end(), interaction.end() ) ),
                 generalized_lotka_volterra_functor()
         )
     }
