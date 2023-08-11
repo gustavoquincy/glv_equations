@@ -1,3 +1,6 @@
+#ifndef glv_equation.h
+#define glv_equation.h
+
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -29,15 +32,16 @@ struct generalized_lotka_volterra_system
     {
         template< class Tuple >
         __host__ __device__
-        void operator()( Tuple t ); /* const */
+        void operator()( Tuple t ) const
     };
 
     generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species );
 
     template< class State, class Deriv >
-    void operator()( const State &y, Deriv &dydt, value_type t); /* const */
+    void operator()( const State &y, Deriv &dydt, value_type t) const
 
     size_t m_num_species;
 };
 
     
+#endif //glv_equation.h
