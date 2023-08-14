@@ -22,6 +22,7 @@ struct generalized_lotka_volterra_system
             thrust::fill( copy_result.begin(), copy_result.end(), 0);
             thrust::copy_if( result.begin(), result.end(), copy_result.begin(), !larger_than_zero());
             value_type m_neg_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0 );
+            // steps for derivation of m_pos_sum and m_neg_sum
             thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + m_neg_sum + thrust::get<3>(t) * m_pos_sum / ( 1 + m_pos_sum )) - m_dilution * thrust::get<0>(t);
         }
     };

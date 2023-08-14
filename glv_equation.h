@@ -14,6 +14,7 @@
 
 #include "pcg_random.hpp"
 //using pcg c++ implementation, pcg64
+// TODO: use this
 
 using namespace std;
 using namespace boost::numeric::odeint;
@@ -22,6 +23,7 @@ typedef double_t value_type;
 typedef thrust::device_vector< value_type > state_type;
 typedef thrust::device_vector< device_vector < value_type >> matrix_type;
 typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
+// TODO: use this
 
 
 
@@ -34,28 +36,28 @@ struct generalized_lotka_volterra_system
         void operator()( Tuple t ) const
     };
 
-    generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species );
+    generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species ); // num_species being passed to m_num_species
 
-    void operator(state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction );
+    void operator(state_type , state_type, state_type, state_type, matrix_type );
 
     state_type get_growth_rate();
 
-    void set_growth_rate( state_type growth_rate );
+    void set_growth_rate( state_type );
 
     value_type get_dilution();
 
-    void set_dilution( value_type dilution );
+    void set_dilution( value_type );
 
     value_type get_Sigma();
 
-    void set_Sigma( state_type Sigma );
+    void set_Sigma( state_type );
 
     value_type get_interaction();
 
-    void set_interaction( matrix_type interaction );
+    void set_interaction( matrix_type );
 
     size_t m_num_species;
-    // TODO: if m_num_species necessary?
+    //m_num_species registered in struct, but not involved in any arithmetic
     
     state_type m_Sigma, m_growth_rate;
     
