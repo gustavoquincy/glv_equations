@@ -13,10 +13,12 @@ const value_type dilution;
 struct larger_than_zero
 {
     bool operator()(const value_type x) { return x > 0; }
-}
+};
 
 struct generalized_lotka_volterra_system
 {
+    generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species ) { }
+
     struct generalized_lotka_volterra_functor
     {
         void operator( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, interaction column } */
@@ -32,9 +34,7 @@ struct generalized_lotka_volterra_system
             value_type m_neg_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0 );
             thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + m_neg_sum + thrust::get<3>(t) * m_pos_sum / ( 1 + m_pos_sum )) - m_dilution * thrust::get<0>(t);
         }
-    }
-
-    generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species );
+    };
 
 
     void operator ( state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction )
@@ -44,8 +44,9 @@ struct generalized_lotka_volterra_system
                 thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate.begin(), Sigma.begin(), interaction.begin() ) ),
                 thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate.end(), Sigma.end(), interaction.end() ) ),
                 generalized_lotka_volterra_functor()
-        )
-    }
+        );
+
+    };
     
     state_type get_growth_rate() { return m_growth_rate; }
 
@@ -69,4 +70,6 @@ struct generalized_lotka_volterra_system
 
     matrix_type m_interaction;
 
-}
+};
+
+// TODO: what should be in header file, what should be in cuda file?
