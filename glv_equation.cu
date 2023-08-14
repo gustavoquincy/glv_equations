@@ -55,6 +55,18 @@ struct generalized_lotka_volterra_system
 
     void set_dilution( value_type dilution ) { m_dilution = dilution; }
 
-    state_type 
+    value_type get_Sigma() { return m_Sigma; }
+
+    void set_Sigma( state_type Sigma ) { thrust::copy( Sigma.begin(), Sigma.end(), m_Sigma.begin() ); }
+
+    value_type get_interaction() { return m_interaction; }
+
+    void set_interaction( matrix_type interaction ) { thrust::copy( interaction.begin(), interaction.end(), m_interaction.begin() ); }
+
+    state_type m_Sigma, m_growth_rate;
+    
+    value_type m_dilution;
+
+    matrix_type m_interaction;
 
 }
