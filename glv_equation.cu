@@ -1,19 +1,9 @@
 #include "glv_equation.h"
 
-state_type equations(state_type y, size_t NumSpecies, state_type growth_rate, state_type Sigma, matrix_type interaction, value_type dilution)
-{
-
-}
-
-const state_type growth_rate;
-const state_type Sigma;
-const matrix_type interaction;
-const value_type dilution;
-
 struct larger_than_zero
 {
     bool operator()(const value_type x) { return x > 0; }
-};
+}
 
 struct generalized_lotka_volterra_system
 {
@@ -39,7 +29,6 @@ struct generalized_lotka_volterra_system
 
     void operator ( state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction )
     {
-
         thrust::for_each(
                 thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate.begin(), Sigma.begin(), interaction.begin() ) ),
                 thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate.end(), Sigma.end(), interaction.end() ) ),
@@ -64,12 +53,12 @@ struct generalized_lotka_volterra_system
 
     void set_interaction( matrix_type interaction ) { thrust::copy( interaction.begin(), interaction.end(), m_interaction.begin() ); }
 
-    state_type m_Sigma, m_growth_rate;
-    
-    value_type m_dilution;
 
-    matrix_type m_interaction;
 
-};
+}
 
-// TODO: what should be in header file, what should be in cuda file?
+
+const state_type growth_rate;
+const state_type Sigma;
+const matrix_type interaction;
+const value_type dilution;

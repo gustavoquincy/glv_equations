@@ -24,7 +24,6 @@ typedef thrust::device_vector< device_vector < value_type >> matrix_type;
 typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
 
 
-state_type equations(state_type, size_t, state_type  /* growth rate */, state_type  /* Sigma */,  matrix_type /* interaction matrix */, value_type /* dilution */);
 
 struct generalized_lotka_volterra_system
 {
@@ -37,10 +36,32 @@ struct generalized_lotka_volterra_system
 
     generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species );
 
-    template< class State, class Deriv >
-    void operator()( const State &y, Deriv &dydt, value_type t) const
+    void operator(state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction );
+
+    state_type get_growth_rate();
+
+    void set_growth_rate( state_type growth_rate );
+
+    value_type get_dilution();
+
+    void set_dilution( value_type dilution );
+
+    value_type get_Sigma();
+
+    void set_Sigma( state_type Sigma );
+
+    value_type get_interaction();
+
+    void set_interaction( matrix_type interaction );
 
     size_t m_num_species;
+    // TODO: if m_num_species necessary?
+    
+    state_type m_Sigma, m_growth_rate;
+    
+    value_type m_dilution;
+
+    matrix_type m_interaction;
 };
 
     
