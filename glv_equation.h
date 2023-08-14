@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <random>
 
 #include <boost/numeric/odeint.hpp>
 #include <boost/numeric/odeint/external/thrust/thrust.hpp>
@@ -25,7 +26,11 @@ typedef thrust::device_vector< device_vector < value_type >> matrix_type;
 typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
 // TODO: use this
 
-
+struct larger_than_zero
+{
+    __host__ __device__
+    bool operator(const value_type x); 
+}
 
 struct generalized_lotka_volterra_system
 {
