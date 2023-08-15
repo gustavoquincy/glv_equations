@@ -59,21 +59,35 @@ struct generalized_lotka_volterra_system
 }
 
 
-const state_type growth_rate;
-const state_type Sigma;
-const matrix_type interaction;
-const value_type dilution;
-
 int main() {
+    const size_t num_species = 10;
     // initalize parameters, set the number of species to 10 in the generalized lv equation
-    size_t num_species = 10;
+
+    const size_t outerloop = 200;  
+    // randomization for growth_rate, Sigma, interaction and dilution
+
+    const size_t innerloop = 500;
+    // randomization for initial condition of glv ODE
+
+    state_type growth_rate(num_species * outerloop), Sigma(num_species * outerloop), dilution(1 * outerloop), interaction(num_species * num_species * outerloop), initial(num_species * outerloop * innerloop);
+    // thrust.fill(v.begin(), v.end(), value)
+    thrust.fill()
 
     pcg_extras::seed_seq_from<std::random_device> seed_source;
 
-    // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
     pcg64 rng(seed_source);
+    // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
 
-    std::uniform_real_distribution<value_type> uniform_dist(0, 1.0);
+    /*include "curand.h"
+    curandStatus_t
+    curandGenerateUniformDouble(
+        curandGenerator_t generator, 
+        double *outputPtr, size_t num)
+    
+    */
+
+    std::uniform_real_distribution<value_type> uniform_real_dist(0, 1.0);
+    std::uniform_int_distribution<size_t> uniform_int_dist(2, 5);
 
     // TODO: randomization of parameters 
     for (int i=0; i<num_species; ++i) {

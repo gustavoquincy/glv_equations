@@ -5,6 +5,7 @@
 #include <vector>
 #include <cmath>
 #include <random>
+#include <iomanip>
 
 #include <boost/numeric/odeint.hpp>
 #include <boost/numeric/odeint/external/thrust/thrust.hpp>
@@ -15,7 +16,7 @@
 
 #include "pcg_random.hpp"
 //using pcg c++ implementation, pcg64
-// TODO: use this
+#include "curand.h"
 
 using namespace std;
 using namespace boost::numeric::odeint;
@@ -70,6 +71,7 @@ struct generalized_lotka_volterra_system
 
     matrix_type m_interaction;
 };
+
 
     
 #endif //glv_equation.h

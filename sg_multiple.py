@@ -23,7 +23,7 @@ def GLV(timespan,initial,NumSpecies,growth_rate,Sigma,interaction,dilution):
     return sol.sol(timespan[1])#返回我们想要的时间下的丰度
 
 #定义循环下结果处理的函数
-def euler(result,threshold):#该函数为里层循环的结果处理
+def euler(result,threshold):#该函数为里层循环的结果处理 #euclidean 
 
     for x in range(result.size):
 
@@ -51,19 +51,24 @@ def func(NumSpecies,timespan,repeat,threshold,showindex):
     for i in range(repeat[0]):#repeat[0]外层循环，意思是随机 生长速度、相互作用和稀释度
 
         Sigma=0.5*rd(NumSpecies)#人为随机给的一个参数，无特定意义
+        #1 NumSpecies * outerloop
 
         growth_rate=0.3+0.5*rd()+0.4*rd()*rd(NumSpecies)#菌群生长速度，随机生成
+        #2 NumSpecies * outerloop
 
         tempt=(-1)**(rd(NumSpecies,NumSpecies)<(1-0.2*rd()**2)).astype('float')#中间变量，主要为相互作用改变符号，返回-1（竞争）和1（促进），-1多一些
+        # 0.2*rd()**2 + rd() - 1 < 0 ? -1 : 1
 
         tempt[tempt==1]=tempt[tempt==1]/np.random.randint(low=2, high=5, size=tempt[tempt==1].shape)#中间变量再加工，对返回1的值除以2到5之间的整数，让正值变小
         
         interaction=tempt*(0.4+1.3*(1-rd()**3)-0.4*rd()+2*0.4*rd()*rd(NumSpecies, NumSpecies))*(rd(NumSpecies, NumSpecies)<(1-0.2*rd()**2))
         #相互作用矩阵，tempt为符号，中间是相互作用矩阵，最后的符号判断(rd(NumSpecies,NumSpecies)<(1-0.2*rd()**2))是随机赋予随机个0，因为相互作用非全连接
+        #3 NumSpecies * NumSpecies * outerloop
 
         for index in range(NumSpecies):interaction[index, index]=-1#将相互作用矩阵对角线全赋值-1，因为自身对自身的作用为-1
 
         dilution=0.1+0.1*rd()#稀释度随机赋值
+        #4 1 * outerloop
 
         if i%showindex==0:
             
@@ -76,6 +81,7 @@ def func(NumSpecies,timespan,repeat,threshold,showindex):
             initialtemp=rd(NumSpecies)#无特定意义，为初始值铺垫
 
             initial=initialtemp/np.sum(initialtemp)#归一化
+            #5
 
             loop.at[j,'percentage']=GLV(timespan,initial,NumSpecies,growth_rate,Sigma,interaction,dilution)#用微分方程解码器返回丰度值装到loop这个空的pandas里面
             
