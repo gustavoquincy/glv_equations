@@ -3,7 +3,7 @@
 struct larger_than_zero
 {   
     bool operator(const value_type x) { return x > 0; }
-}
+};
 
 struct generalized_lotka_volterra_system
 {
@@ -56,8 +56,17 @@ struct generalized_lotka_volterra_system
 
 
 
-}
+};
 
+// generator for random variable of uniform distribution U(0, 1)
+struct uniform_gen {
+    double_t operator()() {
+        pcg64 rng(pcg_extras::seed_seq_from<std::random_device{});
+        // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
+        std::uniform_real_distribution<double_t> uniform_dist(0, 1.0);
+        return uniform_dist(rng);
+    }
+};
 
 int main() {
     const size_t num_species = 10;
@@ -71,28 +80,27 @@ int main() {
 
     state_type growth_rate(num_species * outerloop), Sigma(num_species * outerloop), dilution(1 * outerloop), interaction(num_species * num_species * outerloop), initial(num_species * outerloop * innerloop);
     // thrust.fill(v.begin(), v.end(), value)
-    thrust.fill()
+    thrust::generate(growth_rate.begin(), growth_rate.end(), uniform_gen());
+    thrust::generate(Sigma.begin(), Sigma.end(), uniform_gen());
+    thrust::generate(dilution.begin(), dilution.end(), uniform_gen());
+    thrust::generate(interaction.begin(), interaction.end(), uniform_gen());
+    thrust::generate(initial.begin(), initial.end(), uniform_gen());
+    //suppose here we have randomized the parameters
 
-    pcg_extras::seed_seq_from<std::random_device> seed_source;
-
-    pcg64 rng(seed_source);
-    // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
-
-    /*include "curand.h"
+    /*
+    TODO: might be of use
+    ```
+    include "curand.h"
     curandStatus_t
     curandGenerateUniformDouble(
         curandGenerator_t generator, 
         double *outputPtr, size_t num)
-    
+    ```
     */
 
     std::uniform_real_distribution<value_type> uniform_real_dist(0, 1.0);
     std::uniform_int_distribution<size_t> uniform_int_dist(2, 5);
 
-    // TODO: randomization of parameters 
-    for (int i=0; i<num_species; ++i) {
-
-    }
 
     // TODO: solve ODE
 
