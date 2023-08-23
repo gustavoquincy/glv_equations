@@ -72,6 +72,13 @@ struct generalized_lotka_volterra_system
     matrix_type m_interaction;
 };
 
+struct uniform_gen
+{
+    __host__
+    uniform_gen();
+
+    operator();z    
+}
 
     
 #endif //glv_equation.h

@@ -58,17 +58,27 @@ struct generalized_lotka_volterra_system
 
 // generator for random variable of uniform distribution U(a, b)
 struct uniform_gen {
-    uniform_gen(double_t a, double_t b): m_a(a), m_b(b) {}
+    uniform_gen(value_type a, value_type b): m_a(a), m_b(b) {}
     
-    double_t operator()() {
+    value_type operator()() {
         pcg64 rng(pcg_extras::seed_seq_from<std::random_device{});
         // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
         std::uniform_real_distribution<double_t> uniform_dist(m_a, m_b);
         return uniform_dist(rng);
     }
 
-    double_t m_a, m_b;
+    value_type m_a, m_b;
 };
+
+struct add_value_to_vector
+{
+    add_value_to_vector(value_type added_value): m_added_value(added_value) {}
+    void operator()(value_type& x) {
+       x += m_added_value; 
+    }
+    value_type m_added_value;
+};
+
 
 const size_t num_species = 10;
 // initalize parameters, set the number of species to 10 in the generalized lv equation
@@ -82,7 +92,19 @@ const size_t innerloop = 500;
 int main() {
 
     state_type growth_rate(num_species * outerloop), Sigma(num_species * outerloop), dilution(1 * outerloop), interaction(num_species * num_species * outerloop), initial(num_species * outerloop * innerloop);
-    // thrust.fill(v.begin(), v.end(), value)
+    state_type growth_rate_mean(num_species * outerloop), growth_rate_width(num_species * outerloop), yet_another_vector_filled_with_random_value(num_species * outerloop);
+    thrust::host_vector<value_type> growth_rate_mean_host(1);
+    thrust::generate(growth_rate_mean_host.begin(), growth_rate_mean_host.end(), uniform_gen(0.1, 1.5));
+    thrust::fill(growth_rate_mean.begin(), groth_rate_mean.end(), growth_rate_mean_host[0]);
+    thrust::host_vector<value_type> growth_rate_width_host(1);
+    thrust::generate(growth_rate_width_host.begin(), growth_rate_width_host.end(), uniform_gen(0, 1.0));
+    thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_host[0]);
+    thrust::generate(yet_another_vector_filled_with_random_value.begin(), yet_another_vector_filled_with_random_value.end(), uniform_gen(0, 2.0));
+    thrust::transform(growth_rate_width.begin(), growth_rate_width.end(), yet_another_vector_filled_with_random_value.begin(), growth_rate.begin(), thrust::multiplies<value_type>()); // growth_rate = growth_rate_width *(piecewise) yet_another_vector_filled_with_random_value
+    thrust::transform(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate.begin(), growth_rate.begin(), thrust::plus<value_type>()); // growth_rate += growth_rate_mean
+    thrust::transform(growth_rate.begin(), growth_rate.end(), growth_rate_width.begin(), growth_rate.begin(), thrust::minus<value_type>()); // growth_rate -= growth_rate_width
+
+    thrust::generate(growth_rate_mean.begin(), growth_rate.end(), )
     thrust::generate(growth_rate.begin(), growth_rate.end(), uniform_gen());
     thrust::generate(Sigma.begin(), Sigma.end(), uniform_gen());
     thrust::generate(dilution.begin(), dilution.end(), uniform_gen());
