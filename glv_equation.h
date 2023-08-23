@@ -23,7 +23,7 @@ using namespace boost::numeric::odeint;
 
 typedef double_t value_type;
 typedef thrust::device_vector< value_type > state_type;
-typedef thrust::device_vector< device_vector < value_type >> matrix_type;
+typedef thrust::device_vector< thrust::device_vector < value_type >> matrix_type;
 typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
 // TODO: use this
 
@@ -78,6 +78,16 @@ struct uniform_gen
     uniform_gen();
 
     operator();z    
+}
+
+struct add_value_to_vector
+{
+    __host__ __device__
+}
+
+struct randomize_growth_rate
+{
+    __host__ __device__
 }
 
     

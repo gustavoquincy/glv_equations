@@ -28,7 +28,7 @@ struct generalized_lotka_volterra_system
     };
 
 
-    void operator()( state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction )
+    void operator()( state_type& y , state_type& dydt, state_type growth_rate, state_type Sigma, state_type interaction )
     {
         thrust::for_each(
                 thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate.begin(), Sigma.begin(), interaction.begin() ) ),
@@ -79,6 +79,121 @@ struct add_value_to_vector
     value_type m_added_value;
 };
 
+struct randomize_growth_rate
+{
+    void operator()(state_type& growth_rate) {
+        size_t dim = growth_rate.size();
+        state_type growth_rate_mean(dim), growth_rate_width(dim), yet_another_vector_filled_with_random_value(dim);
+        thrust::host_vector<value_type> growth_rate_mean_host(1);
+        thrust::generate(growth_rate_mean_host.begin(), growth_rate_mean_host.end(), uniform_gen(0.1, 1.5));
+        thrust::fill(growth_rate_mean.begin(), groth_rate_mean.end(), growth_rate_mean_host[0]);
+        thrust::host_vector<value_type> growth_rate_width_host(1);
+        thrust::generate(growth_rate_width_host.begin(), growth_rate_width_host.end(), uniform_gen(0, growth_rate_mean_host[0]));
+        thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_host[0]);
+        thrust::generate(yet_another_vector_filled_with_random_value.begin(), yet_another_vector_filled_with_random_value.end(), uniform_gen(0, 2.0));
+        thrust::transform(growth_rate_width.begin(), growth_rate_width.end(), yet_another_vector_filled_with_random_value.begin(), growth_rate.begin(), thrust::multiplies<value_type>()); // growth_rate = growth_rate_width *(piecewise) yet_another_vector_filled_with_random_value
+        thrust::transform(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate.begin(), growth_rate.begin(), thrust::plus<value_type>()); // growth_rate += growth_rate_mean
+        thrust::transform(growth_rate.begin(), growth_rate.end(), growth_rate_width.begin(), growth_rate.begin(), thrust::minus<value_type>()); // growth_rate -= growth_rate_width
+    }
+}
+
+struct randomize_interaction
+{
+    randomize_interaction(size_t num_species): m_num_species(num_species) {}
+
+    struct is_below_promote_density
+    {
+        bool operator()( Tuple t ) /* t = { 0 threshold_vector, 1 promote_dense, 2 compete_dense, 3 promote_mean, 4 promote_width, 5 compete_mean, 6 compete_width, 7 one_more_vec, 8 interaction } (arity = 9)*/
+        {
+            return thrust::get<0>(t) <= thrust::get<1>(t);
+        }
+    };
+
+    struct is_above_compete_density
+    {
+        bool opeartor()( Tuple t )
+        {
+            return thrust::get<0>(t) >= thrust::get<2>(t);
+        }
+    };
+
+    struct set_promote_value
+    {
+        void operator()( Tuple t )
+        {
+            thrust::get<8>(t) = thrust::get<3>(t) - thrust::get<4>(t) + 2 * thrust::get<4>(t) * thrust::get<7>(t);
+        }
+    };
+
+    struct set_compete_value
+    {
+        void operator()( Tuple t )
+        {
+            thrust::get<8>(t) = -1 * (thrust::get<5>(t) - thrust::get<6>(t) + 2 * thrust::get<6>(t) * thrust::get<7>(t));
+        }
+    };
+
+    struct is_diagonal
+    {
+        bool operator()( Tuple t ) /* t = { index, interaction }*/
+        {
+            return thrust::get<0>(t) % (m_num_species + 1) == 1;
+        }
+    };
+
+    struct set_minus_one
+    {
+        void operator()( Tuple t ) {
+            thrust::get<1>(t) = -1.0;
+        }
+    };
+
+    void operator()(state_type& interaction) {
+        size_t dim = interaction.size();
+        state_type compete_dense(1), promote_dense(1);
+        thrust::generate(compete_dense.begin(), compete_dense.end(), uniform_gen(0.5, 1.0));
+        thrust::generate(promote_dense.begin(), promote_dense.end(), uniform_gen(0, 1 - compete_dense[0]));
+        state_type promote_mean(dim), promote_width(dim), compete_mean(dim), compete_width(dim);
+        thrust::host_vector<value_type> promote_mean_host(1), promote_width_host(1), compete_mean_host(1), compete_width_host(1);
+        thrust::generate(compete_mean_host.begin(), compete_mean_host.end(), uniform_gen(0.5, 2.0)); 
+        thrust::fill(compete_mean.begin(), compete_mean.end(), compete_mean_host[0]); 
+        thrust::generate(promote_mean_host.begin(), promote_mean_host.end(), uniform_gen(0.01, 1.0));
+        thrust::fill(promote_mean.begin(), promote_mean.end(), promote_mean_host[0]);
+        thrust::generate(compete_width_host.begin(), compete_width_host.end(), uniform_gen(0, compete_mean_host[0]));
+        thrust::fill(compete_width.begin(), compete_width.end(), compete_width_host[0]);
+        thrust::generate(promote_width_host.begin(), promote_width_host.end(), uniform_gen(0, promote_mean_host[0]));
+        thrust::fill(promote_width.begin(), promote_width.end(), promote_width_host[0]); 
+        // generate once, then fill the device vector
+        state_type threshold_vector(dim), one_more_vec(dim);
+        thrust::generate(threshold_vector.begin(), threshold_vector.end(), uniform_gen(0, 1.0));
+        thrust::generate(one_more_vec.begin(), one_more_vec.end(), uniform_gen(0, 1.0));
+        thrust::transform_if( thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), 
+                                                                                compete_mean.begin(), compete_width.begin(), one_more_vec.begin(), interaction.begin() )),
+                            thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(),
+                                                                            compete_mean.end(), compete_width.end(), one_more_vec.end(), interaction.end() )),
+                            thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), 
+                                                                                compete_mean.begin(), compete_width.begin(), one_more_vec.begin(), interaction.begin() )),
+                            is_below_promote_density(),
+                            set_promote_value() );
+        thrust::transform_if( thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), 
+                                                                                compete_mean.begin(), compete_width.begin(), one_more_vec.begin(), interaction.begin() )),
+                            thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(),
+                                                                            compete_mean.end(), compete_width.end(), one_more_vec.end(), interaction.end() )),
+                            thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), 
+                                                                                compete_mean.begin(), compete_width.begin(), one_more_vec.begin(), interaction.begin() )),
+                            is_above_compete_density(),
+                            set_compete_value() );
+        size_t index(dim);
+        thrust::sequence(index.begin(), index.end(), 1);
+        thrust::transform_if( thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction.begin() )), 
+                            thrust::make_zip_iterator( thrust::make_tuple( index.end(), interation.end() )), 
+                            thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction.begin() )), 
+                            set_minus_one(),
+                            is_diagonal() );
+    }
+
+    size_t m_num_species;
+}
 
 const size_t num_species = 10;
 // initalize parameters, set the number of species to 10 in the generalized lv equation
@@ -92,23 +207,17 @@ const size_t innerloop = 500;
 int main() {
 
     state_type growth_rate(num_species * outerloop), Sigma(num_species * outerloop), dilution(1 * outerloop), interaction(num_species * num_species * outerloop), initial(num_species * outerloop * innerloop);
-    state_type growth_rate_mean(num_species * outerloop), growth_rate_width(num_species * outerloop), yet_another_vector_filled_with_random_value(num_species * outerloop);
-    thrust::host_vector<value_type> growth_rate_mean_host(1);
-    thrust::generate(growth_rate_mean_host.begin(), growth_rate_mean_host.end(), uniform_gen(0.1, 1.5));
-    thrust::fill(growth_rate_mean.begin(), groth_rate_mean.end(), growth_rate_mean_host[0]);
-    thrust::host_vector<value_type> growth_rate_width_host(1);
-    thrust::generate(growth_rate_width_host.begin(), growth_rate_width_host.end(), uniform_gen(0, 1.0));
-    thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_host[0]);
-    thrust::generate(yet_another_vector_filled_with_random_value.begin(), yet_another_vector_filled_with_random_value.end(), uniform_gen(0, 2.0));
-    thrust::transform(growth_rate_width.begin(), growth_rate_width.end(), yet_another_vector_filled_with_random_value.begin(), growth_rate.begin(), thrust::multiplies<value_type>()); // growth_rate = growth_rate_width *(piecewise) yet_another_vector_filled_with_random_value
-    thrust::transform(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate.begin(), growth_rate.begin(), thrust::plus<value_type>()); // growth_rate += growth_rate_mean
-    thrust::transform(growth_rate.begin(), growth_rate.end(), growth_rate_width.begin(), growth_rate.begin(), thrust::minus<value_type>()); // growth_rate -= growth_rate_width
+    thrust::transform(growth_rate.begin(), growth_rate.end(), randomize_growth_rate());
+    
+    
+    
+    
+    
+    
 
-    thrust::generate(growth_rate_mean.begin(), growth_rate.end(), )
-    thrust::generate(growth_rate.begin(), growth_rate.end(), uniform_gen());
     thrust::generate(Sigma.begin(), Sigma.end(), uniform_gen());
     thrust::generate(dilution.begin(), dilution.end(), uniform_gen());
-    thrust::generate(interaction.begin(), interaction.end(), uniform_gen());
+
     thrust::generate(initial.begin(), initial.end(), uniform_gen());
 
 
