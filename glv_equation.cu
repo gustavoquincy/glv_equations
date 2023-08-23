@@ -2,7 +2,7 @@
 
 struct larger_than_zero
 {   
-    bool operator(const value_type x) { return x > 0; }
+    bool operator()(const value_type x) { return x > 0; }
 };
 
 struct generalized_lotka_volterra_system
@@ -11,7 +11,7 @@ struct generalized_lotka_volterra_system
 
     struct generalized_lotka_volterra_functor
     {
-        void operator( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, interaction column } */
+        void operator()( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, interaction column } */
         {   
             thrust::device_vector<value_type> result( m_num_species );
             thrust::transform( y.begin(), y.end(), thrust::get<4>(t).begin(), result.begin(), thrust::multiplies<value_type>());
@@ -28,7 +28,7 @@ struct generalized_lotka_volterra_system
     };
 
 
-    void operator ( state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction )
+    void operator()( state_type y , state_type dydt, state_type &growth_rate, state_type &Sigma, matrix_type &interaction )
     {
         thrust::for_each(
                 thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate.begin(), Sigma.begin(), interaction.begin() ) ),
@@ -44,7 +44,7 @@ struct generalized_lotka_volterra_system
 
     value_type get_dilution() { return m_dilution; }
 
-    void set_dilution( value_type dilution ) { m_dilution = dilution; }
+    void set_dilution( value_type dilution ) { thrust::copy( dilution.begin(), dilution.end(), m_dilution.begin() ); }
 
     value_type get_Sigma() { return m_Sigma; }
 
@@ -54,29 +54,32 @@ struct generalized_lotka_volterra_system
 
     void set_interaction( matrix_type interaction ) { thrust::copy( interaction.begin(), interaction.end(), m_interaction.begin() ); }
 
-
-
 };
 
-// generator for random variable of uniform distribution U(0, 1)
+// generator for random variable of uniform distribution U(a, b)
 struct uniform_gen {
+    uniform_gen(double_t a, double_t b): m_a(a), m_b(b) {}
+    
     double_t operator()() {
         pcg64 rng(pcg_extras::seed_seq_from<std::random_device{});
         // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
-        std::uniform_real_distribution<double_t> uniform_dist(0, 1.0);
+        std::uniform_real_distribution<double_t> uniform_dist(m_a, m_b);
         return uniform_dist(rng);
     }
+
+    double_t m_a, m_b;
 };
 
+const size_t num_species = 10;
+// initalize parameters, set the number of species to 10 in the generalized lv equation
+
+const size_t outerloop = 200;  
+// randomization for growth_rate, Sigma, interaction and dilution
+
+const size_t innerloop = 500;
+// randomization for initial condition of glv ODE
+
 int main() {
-    const size_t num_species = 10;
-    // initalize parameters, set the number of species to 10 in the generalized lv equation
-
-    const size_t outerloop = 200;  
-    // randomization for growth_rate, Sigma, interaction and dilution
-
-    const size_t innerloop = 500;
-    // randomization for initial condition of glv ODE
 
     state_type growth_rate(num_species * outerloop), Sigma(num_species * outerloop), dilution(1 * outerloop), interaction(num_species * num_species * outerloop), initial(num_species * outerloop * innerloop);
     // thrust.fill(v.begin(), v.end(), value)
@@ -85,7 +88,7 @@ int main() {
     thrust::generate(dilution.begin(), dilution.end(), uniform_gen());
     thrust::generate(interaction.begin(), interaction.end(), uniform_gen());
     thrust::generate(initial.begin(), initial.end(), uniform_gen());
-    //suppose here we have randomized the parameters
+
 
     /*
     TODO: might be of use
@@ -98,12 +101,13 @@ int main() {
     ```
     */
 
-    std::uniform_real_distribution<value_type> uniform_real_dist(0, 1.0);
-    std::uniform_int_distribution<size_t> uniform_int_dist(2, 5);
-
-
     // TODO: solve ODE
-
+    generalized_lotka_volterra_system glv( num_species );
+    glv.set_growth_rate(growth_rate);
+    glv.set_Sigma(Sigma);
+    glv.set_interaction(interaction);
+    glv.set_dilution(dilution);
+    integrate_adaptive( make_controlled(1.0e-6, 1.0e-6, stepper_type()), glv, )
 
     // TODO: parse results with Euclidean distance aka 2-norm
 

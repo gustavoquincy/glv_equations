@@ -275,6 +275,7 @@ int main( int arc , char* argv[] )
 
     // calculate transients
     integrate_adaptive( make_controlled( 1.0e-6 , 1.0e-6 , stepper_type() ) , lorenz , std::make_pair( x.begin() , x.begin() + 3 * N ) , 0.0 , 10.0 , dt );
+    // df
 
     // calculate the Lyapunov exponents -- the main loop
     double t = 0.0;
@@ -284,12 +285,13 @@ int main( int arc , char* argv[] )
         t += 1.0;
         obs( x , t );
     }
+    // 10000*10
 
     vector< value_type > lyap( N );
     obs.fill_lyap( lyap );
 
     for( size_t i=0 ; i<N ; ++i )
-        cout << beta_host[i] << "\t" << lyap[i] << "\n";
+        cout << beta_host[i] << "\t" << =[i] << "\n";
     //]
 
     return 0;

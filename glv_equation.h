@@ -15,7 +15,7 @@
 #include <thrust/functional.h>
 
 #include "pcg_random.hpp"
-//using pcg c++ implementation, pcg64
+//using pcg c++ implementation, pcg64, compilation requires -std=c++11 flag
 #include "curand.h"
 
 using namespace std;
