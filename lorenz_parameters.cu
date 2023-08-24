@@ -50,7 +50,7 @@ struct lorenz_system
         template< class T >
         __host__ __device__
         void operator()( T t ) const
-        {
+        {   
             // unpack the parameter we want to vary and the Lorenz variables
             value_type R = thrust::get< 3 >( t );
             value_type x = thrust::get< 0 >( t );

@@ -81,23 +81,31 @@ struct add_value_to_vector
 
 struct randomize_growth_rate
 {
+   struct set_growthrate
+   {
+        void opeartor()( Tuple t ) {
+            thrust::get<3>(t) = thrust::get<0>(t) - thrust::get<1>(t) + 2 * thrust::get<1>(t) * thrust::get<2>(t); // t = { growth_rate_mean, growth_rate_width, unit_random_vec, growth_rate}
+        }
+   };
+
     void operator()(state_type& growth_rate) {
         size_t dim = growth_rate.size();
-        state_type growth_rate_mean(dim), growth_rate_width(dim), yet_another_vector_filled_with_random_value(dim);
+        state_type growth_rate_mean(dim), growth_rate_width(dim), unit_random_vec(dim);
         thrust::host_vector<value_type> growth_rate_mean_host(1);
         thrust::generate(growth_rate_mean_host.begin(), growth_rate_mean_host.end(), uniform_gen(0.1, 1.5));
         thrust::fill(growth_rate_mean.begin(), groth_rate_mean.end(), growth_rate_mean_host[0]);
         thrust::host_vector<value_type> growth_rate_width_host(1);
         thrust::generate(growth_rate_width_host.begin(), growth_rate_width_host.end(), uniform_gen(0, growth_rate_mean_host[0]));
         thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_host[0]);
-        thrust::generate(yet_another_vector_filled_with_random_value.begin(), yet_another_vector_filled_with_random_value.end(), uniform_gen(0, 2.0));
-        thrust::transform(growth_rate_width.begin(), growth_rate_width.end(), yet_another_vector_filled_with_random_value.begin(), growth_rate.begin(), thrust::multiplies<value_type>()); // growth_rate = growth_rate_width *(piecewise) yet_another_vector_filled_with_random_value
-        thrust::transform(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate.begin(), growth_rate.begin(), thrust::plus<value_type>()); // growth_rate += growth_rate_mean
-        thrust::transform(growth_rate.begin(), growth_rate.end(), growth_rate_width.begin(), growth_rate.begin(), thrust::minus<value_type>()); // growth_rate -= growth_rate_width
+        thrust::generate(unit_random_vec.begin(), unit_random_vec.end(), uniform_gen(0, 1.0));
+        thrust::transform( thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.begin(), growth_rate_width.begin(), unit_random_vec.begin(), growth_rate.begin() )),
+                            thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.end(), growth_rate_width.end(), unit_random_vec.end(), growth_rate.end() )),
+                            thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.begin(), growth_rate_width.begin(), unit_random_vec.begin(), growth_rate.begin() )),
+                            set_growthrate() );
     }
 }
 
-struct randomize_interaction
+struct randomize_interaction 
 {
     randomize_interaction(size_t num_species): m_num_species(num_species) {}
 
