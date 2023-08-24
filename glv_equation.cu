@@ -18,10 +18,10 @@ struct generalized_lotka_volterra_system
             thrust::device_vector<value_type> copy_result( m_num_species );
             thrust::fill( copy_result.begin(), copy_result.end(), 0);
             thrust::copy_if( result.begin(), result.end(), copy_result.begin(), larger_than_zero());
-            value_type m_pos_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0 );
+            value_type m_pos_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0.0 );
             thrust::fill( copy_result.begin(), copy_result.end(), 0);
             thrust::copy_if( result.begin(), result.end(), copy_result.begin(), !larger_than_zero());
-            value_type m_neg_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0 );
+            value_type m_neg_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0.0 );
             // steps above for derivation of m_pos_sum and m_neg_sum
             thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + m_neg_sum + thrust::get<3>(t) * m_pos_sum / ( 1 + m_pos_sum )) - m_dilution * thrust::get<0>(t);
         }
@@ -72,7 +72,7 @@ struct uniform_gen {
 
 struct set_growthrate
 {
-    void opeartor()( Tuple t ) {
+    void opeartor()( Tuple& t ) {
         thrust::get<3>(t) = thrust::get<0>(t) - thrust::get<1>(t) + 2 * thrust::get<1>(t) * thrust::get<2>(t); // t = { growth_rate_mean, growth_rate_width, unit_random_vec, growth_rate}
     }
 };
@@ -95,7 +95,7 @@ struct is_above_compete_density
 
 struct set_promote_value
 {
-    void operator()( Tuple t )
+    void operator()( Tuple& t )
     {
         thrust::get<8>(t) = thrust::get<3>(t) - thrust::get<4>(t) + 2 * thrust::get<4>(t) * thrust::get<7>(t);
     }
@@ -103,7 +103,7 @@ struct set_promote_value
 
 struct set_compete_value
 {
-    void operator()( Tuple t )
+    void operator()( Tuple& t )
     {
         thrust::get<8>(t) = -1 * (thrust::get<5>(t) - thrust::get<6>(t) + 2 * thrust::get<6>(t) * thrust::get<7>(t));
     }
@@ -123,18 +123,35 @@ struct is_diagonal
 
 struct set_minus_one
 {
-    void operator()( Tuple t ) {
+    void operator()( Tuple& t ) {
         thrust::get<1>(t) = -1.0;
     }
 };
 
-
-struct randomize_dilution
+struct set_dilution
 {
-    operator()(& dilution) {
+    set_dilution(value_type growth_rate_mean): m_growth_rate_mean(growth_rate_mean) {}
 
+    void operator()(value_type& di) {
+        state_type random_vec_a(1), random_vec_b(1);
+        thrust::generate(random_vec_a.begin(), random_vec_a.end(), uniform_gen(0, m_growth_rate_mean));
+        thrust::generate(random_vec_b.begin(), random_vec_b.end(), uniform_gen(0, 0.3));
+        di = random_vec_a[0] < random_vec_b[0] ? random_vec_a[0] :random_vec_b[0];
     }
+
+    value_type m_growth_rate_mean;
 };
+
+struct normalize
+{
+    normalize(value_type normalized_by): m_normalized_by(normalized_by) {}
+
+    void operator()(value_type& x) {
+        x /= m_normalized_by;
+    }
+
+    value_type m_normalized_by;
+}
 
 const size_t num_species = 10;
 // initalize parameters, set the number of species to 10 in the generalized lv equation
@@ -206,13 +223,14 @@ int main() {
         set_minus_one(),
         is_diagonal(num_species) 
     );
+    // randomize Sigma
     thrust::generate(Sigma.begin(), Sigma.end(), uniform_gen(0, 0.5));
-
-    
-
-    thrust::generate(dilution.begin(), dilution.end(), uniform_gen());
-
-    thrust::generate(initial.begin(), initial.end(), uniform_gen());
+    // randomize dilution
+    thrust::for_each(dilution.begin(), dilution.end(), set_dilution(growth_rate_mean_host[0]));
+    // randomize initial
+    thrust::generate(initial.begin(), initial.end(), uniform_gen(0, 1.0));
+    value_type initial_sum = thrust::reduce(initial.begin(), initial.end(), 0.0);
+    thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
 
 
     /*
