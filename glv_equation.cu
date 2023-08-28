@@ -35,9 +35,9 @@ struct generalized_lotka_volterra_system
         __host__ __device__
         void operator()( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, interaction column } */
         {   
-            thrust::device_vector<value_type> result( m_num_species );
+            state_type result( m_num_species );
             thrust::transform( y.begin(), y.end(), thrust::get<4>(t).begin(), result.begin(), thrust::multiplies<value_type>());
-            thrust::device_vector<value_type> copy_result( m_num_species );
+            state_type copy_result( m_num_species );
             thrust::fill( copy_result.begin(), copy_result.end(), 0);
             thrust::copy_if( result.begin(), result.end(), copy_result.begin(), larger_than_zero());
             value_type m_pos_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0.0 );
@@ -50,7 +50,7 @@ struct generalized_lotka_volterra_system
     };
 
 
-    void operator()( state_type& y , state_type& dydt, state_type growth_rate, state_type Sigma, state_type interaction )
+    void operator()( state_type& y , state_type& dydt, state_type growth_rate, state_type Sigma, state_type interaction, state_type dilution )
     {
         thrust::for_each(
                 thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate.begin(), Sigma.begin(), interaction.begin() ) ),
@@ -60,22 +60,7 @@ struct generalized_lotka_volterra_system
 
     };
     
-    state_type get_growth_rate() { return m_growth_rate; }
-
-    void set_growth_rate( state_type growth_rate ) { thrust::copy( growth_rate.begin(), growth_rate.end(), m_growth_rate.begin() ); }
-
-    value_type get_dilution() { return m_dilution; }
-
-    void set_dilution( value_type dilution ) { thrust::copy( dilution.begin(), dilution.end(), m_dilution.begin() ); }
-
-    value_type get_Sigma() { return m_Sigma; }
-
-    void set_Sigma( state_type Sigma ) { thrust::copy( Sigma.begin(), Sigma.end(), m_Sigma.begin() ); }
-
-    value_type get_interaction() { return m_interaction; }
-
-    void set_interaction( matrix_type interaction ) { thrust::copy( interaction.begin(), interaction.end(), m_interaction.begin() ); }
-
+    size_t m_num_species;
 };
 
 // generator for random variable of uniform distribution U(a, b)
@@ -95,18 +80,18 @@ struct uniform_gen {
 
 struct set_growthrate
 { 
-    template<class Tuple >
+    template<class T >
     __host__
-    void opeartor()( Tuple& t ) {
+    void opeartor()( T& t ) {
         thrust::get<3>(t) = thrust::get<0>(t) - thrust::get<1>(t) + 2 * thrust::get<1>(t) * thrust::get<2>(t); // t = { growth_rate_mean, growth_rate_width, unit_random_vec, growth_rate}
     }
 };
 
 struct is_below_promote_density
 {   
-    template<class Tuple >
+    template<class T >
     __host__
-    bool operator()( Tuple t ) /* t = { 0 threshold_vector, 1 promote_dense, 2 compete_dense, 3 promote_mean, 4 promote_width, 5 compete_mean, 6 compete_width, 7 unit_random_vec, 8 interaction } (arity = 9)*/
+    bool operator()( T t ) /* t = { 0 threshold_vector, 1 promote_dense, 2 compete_dense, 3 promote_mean, 4 promote_width, 5 compete_mean, 6 compete_width, 7 unit_random_vec, 8 interaction } (arity = 9)*/
     {
         return thrust::get<0>(t) <= thrust::get<1>(t);
     }
@@ -114,9 +99,9 @@ struct is_below_promote_density
 
 struct is_above_compete_density
 {
-    template<class Tuple >
+    template<class T >
     __host__
-    bool opeartor()( Tuple t )
+    bool opeartor()( T t )
     {
         return thrust::get<0>(t) >= thrust::get<2>(t);
     }
@@ -124,44 +109,57 @@ struct is_above_compete_density
 
 struct set_promote_value
 {
-    template<class Tuple >
+    template<class T >
     __host__
-    void operator()( Tuple& t )
+    T operator()( T t )
     {
         thrust::get<8>(t) = thrust::get<3>(t) - thrust::get<4>(t) + 2 * thrust::get<4>(t) * thrust::get<7>(t);
+        return t;
     }
 };
 
 struct set_compete_value
 {
-    template<class Tuple >
+    template<class T >
     __host__
-    void operator()( Tuple& t )
+    T operator()( T t )
     {
         thrust::get<8>(t) = -1 * (thrust::get<5>(t) - thrust::get<6>(t) + 2 * thrust::get<6>(t) * thrust::get<7>(t));
+        return t;
     }
 };
 
 struct is_diagonal
 {
-    is_diagonal(size_t num_species): m_num_species(num_species) {}
+    is_diagonal(size_t num_species): m_num_species(num_species) {
+        m_counter = 0;
+        m_i = 1;
+    }
 
     template<class Tuple >
     __host__
     bool operator()( Tuple t ) /* t = { index, interaction }*/
     {
-        return thrust::get<0>(t) % (m_num_species + 1) == 1;
+        bool is_diag = thrust::get<0>(t) % (m_dim + 1) == m_i;
+        if ( is_diag ) m_counter += 1;
+        if ( m_counter == m_dim ) {
+            m_i = (m_i + 1) % (m_dim + 1);
+            m_counter = 0;
+        }
+        return is_diag;
     }
 
-    size_t m_num_species;
+    const size_t m_num_species;
+    size_t m_i, m_counter;
 };
 
 struct set_minus_one
 {
-    template<class Tuple >
+    template<class T >
     __host__
-    void operator()( Tuple& t ) {
+    T operator()( T t ) {
         thrust::get<1>(t) = -1.0;
+        return t;
     }
 };
 
@@ -279,7 +277,7 @@ int main() {
     // TODO: use curand to generate random numbers on device w/ curand kernel
 
     // TODO: solve ODE
-    generalized_lotka_volterra_system glv( num_species );
+    generalized_lotka_volterra_system glv_system( num_species );
     glv.set_growth_rate(growth_rate);
     glv.set_Sigma(Sigma);
     glv.set_interaction(interaction);

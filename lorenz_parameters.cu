@@ -275,6 +275,7 @@ int main( int arc , char* argv[] )
 
     // calculate transients
     integrate_adaptive( make_controlled( 1.0e-6 , 1.0e-6 , stepper_type() ) , lorenz , std::make_pair( x.begin() , x.begin() + 3 * N ) , 0.0 , 10.0 , dt );
+    // integrate_adaptive( stepper , system , x0 , t0 , t1 , dt )
     // df
 
     // calculate the Lyapunov exponents -- the main loop
