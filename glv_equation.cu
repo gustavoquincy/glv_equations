@@ -129,16 +129,15 @@ struct set_compete_value
     }
 };
 
-struct is_diagonal
+struct index_transform
 {
-    is_diagonal(size_t num_species): m_num_species(num_species) {
+    index_transform(size_t num_species): m_num_species(num_species) {
         m_counter = 0;
         m_i = 1;
     }
 
-    template<class Tuple >
     __host__
-    bool operator()( Tuple t ) /* t = { index, interaction }*/
+    void operator()(size_t& idx)
     {
         bool is_diag = thrust::get<0>(t) % (m_dim + 1) == m_i;
         if ( is_diag ) m_counter += 1;
@@ -146,7 +145,7 @@ struct is_diagonal
             m_i = (m_i + 1) % (m_dim + 1);
             m_counter = 0;
         }
-        return is_diag;
+        idx = is_diag;
     }
 
     const size_t m_num_species;
@@ -190,6 +189,13 @@ struct normalize
     value_type m_normalized_by;
 }
 
+struct is_diagonal
+{
+    template class< T >
+    bool operator()(T t) /* t = { index, interaction }*/ {
+        return thrust::get<0>(t);
+    }
+};
 const size_t num_species = 10;
 // initalize parameters, set the number of species to 10 in the generalized lv equation
 
@@ -251,14 +257,16 @@ int main() {
         is_above_compete_density(),
         set_compete_value() 
     );
-    thrust::host_vector<size_t> index(dim);
-    thrust::sequence(index.begin(), index.end(), 1);
+    thrust::host_vector<size_t> index_host(dim);
+    thrust::sequence(index_host.begin(), index_host.end(), 1);
+    thrust::for_each(index_host.begin(), index_host.end(), index_transform(num_species));
+    value_type index = index_host;
     thrust::transform_if( 
         thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction_host.begin() )), 
         thrust::make_zip_iterator( thrust::make_tuple( index.end(), interation_host.end() )), 
         thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction_host.begin() )), 
         set_minus_one(),
-        is_diagonal(num_species) 
+        is_diagonal() 
     );
     // randomize Sigma
     thrust::generate(Sigma_host.begin(), Sigma_host.end(), uniform_gen(0, 0.5));
