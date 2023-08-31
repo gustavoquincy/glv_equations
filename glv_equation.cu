@@ -1,4 +1,5 @@
 #include <iostream>
+#include <cstdlib>
 #include <vector>
 #include <cmath>
 #include <random>
@@ -8,10 +9,16 @@
 #include <boost/numeric/odeint/external/thrust/thrust.hpp>
 
 #include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <thrust/reduce.h>
 #include <thrust/functional.h>
+#include <thrust/fill.h>
+#include <thrust/for_each.h>
+#include <thrust/generate.h>
+#include <thrust/reduce.h>
 
-#include "pcg_random.hpp"
+
+#include "pcg-cpp-0.98/include/pcg_random.hpp"
 //using pcg c++ implementation, pcg64, compilation requires -std=c++11 flag
 
 typedef double_t value_type;
@@ -340,7 +347,6 @@ int main() {
     integrate_adaptive( make_controlled(1.0e-6, 1.0e-6, stepper_type()), glv_system, initial, 0.0, 10.0, dt);
 
     // TODO: parse results with Euclidean distance aka 2-norm
-
 
 
     return 0;
