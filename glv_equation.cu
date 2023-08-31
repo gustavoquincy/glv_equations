@@ -19,52 +19,83 @@ typedef thrust::host_vector< value_type > host_type;
 typedef thrust::device_vector< value_type > state_type;
 typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
 
-struct larger_than_zero
-{   
-    __host__ __device__
-    bool operator()(const value_type x) { return x > 0; }
-};
 
 struct generalized_lotka_volterra_system
 {
-    generalized_lotka_volterra_system( size_t num_species ): m_num_species( num_species ) { }
+    generalized_lotka_volterra_system( size_t num_species, state_type growth_rate, state_type Sigma, state_type interaction, state_type dilution )
+    : m_num_species( num_species ), m_growth_rate(growth_rate), m_Sigma(Sigma), m_interaction(interaction), m_dilution(dilution) { 
+        // normalize vectors by dimension
+        state_type growth_rate_i(m_growth_rate.size() * m_innerloop), Sigma_i(m_Sigma.size() * m_innerloop), dilution_i(m_dilution.size() * m_innerloop), interaction_i(m_interaction.size() * m_innerloop);
+        for (int i = 0; i < m_innerloop; ++i) {
+            thrust::copy(m_growth_rate.begin(), m_growth_rate.end(), growth_rate_i.begin() + i * m_growth_rate.size());
+            thrust::copy(m_Sigma.begin(), m_Sigma.end(), Sigma_i.begin() + i * m_Sigma.size());
+            thrust::copy(m_dilution.begin(), m_dilution.end(), dilution_i.begin() + i * m_dilution.size());
+            thrust::copy(m_interaction.begin(), m_interaction.end(), interaction_i.begin() + i * m_interaction.size());
+        }
+        state_type dilution_ni(dilution_i.size() * m_outerloop)
+        for (int i = 0; i < m_outerloop; ++i) {
+            thrust::copy(dilution_i.begin(), dilution_i.end(), dilution_ni.begin() + i * dilution_i.size());
+        }
+        state_type interaction_column(growth_rate_i.size());
+        for (int i = 0; i < m_num_species; ++i) {
+            for (int j = 0; j < m_num_sepecies * m_innerloop * m_outerloop; ++j) {
+                interaction_column[j] = m_interaction[ i + m_num_species * j ];
+            }     
+        }
+    }
 
     struct generalized_lotka_volterra_functor
     {
+        generalized_lotka_volterra_functor( value_type pos_sum, value_type neg_sum ): m_pos_sum(pos_sum), m_neg_sum(neg_sum) { }
+
         template< class Tuple >
         __host__ __device__
-        void operator()( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, interaction column } */
+        void operator()( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, dilution } */
         {   
-            state_type result( m_num_species );
-            thrust::transform( y.begin(), y.end(), thrust::get<4>(t).begin(), result.begin(), thrust::multiplies<value_type>());
-            state_type copy_result( m_num_species );
-            thrust::fill( copy_result.begin(), copy_result.end(), 0);
-            thrust::copy_if( result.begin(), result.end(), copy_result.begin(), larger_than_zero());
-            value_type m_pos_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0.0 );
-            thrust::fill( copy_result.begin(), copy_result.end(), 0);
-            thrust::copy_if( result.begin(), result.end(), copy_result.begin(), !larger_than_zero());
-            value_type m_neg_sum = thrust::reduce( copy_result.begin(), copy_result.end(), 0.0 );
-            // steps above for derivation of m_pos_sum and m_neg_sum
-            thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + m_neg_sum + thrust::get<3>(t) * m_pos_sum / ( 1 + m_pos_sum )) - m_dilution * thrust::get<0>(t);
+            thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + m_neg_sum + thrust::get<3>(t) * m_pos_sum / ( 1 + m_pos_sum )) - thrust::get<4>(t) * thrust::get<0>(t);
         }
+
+        value_type m_pos_sum, m_neg_sum;
     };
 
+    struct larger_than_zero
+    {   
+        __host__ __device__
+        bool operator()(value_type x) { return x > 0; }
+    };
 
-    void operator()( state_type& y , state_type& dydt, state_type growth_rate, state_type Sigma, state_type interaction, state_type dilution )
+    struct smaller_than_zero
     {
-        thrust::for_each(
-                thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate.begin(), Sigma.begin(), interaction.begin() ) ),
-                thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate.end(), Sigma.end(), interaction.end() ) ),
-                generalized_lotka_volterra_functor()
-        );
+        __host__ __device__
+        bool operator(value_type x) { return x < 0; }
+    }
 
+    void operator()( state_type& y , state_type& dydt, value_type t)
+    {
+        state_type result(y.size());
+        thrust::transform(y.begin(), y.end(), interaction_column.begin(), result.begin(), thrust::multiplies<value_type>());
+        state_type copy_result(y.size());
+        thrust::fill(copy_result.begin(), copy_result.end(), 0.0);
+        thrust::copy_if(result.begin(), result.end(), copy_result.begin(), larger_than_zero());
+        value_type possum = thrust::reduce(copy_result.begin(), copy_result.end(), 0.0);
+        thrust::fill(copy_result.begin(), copy_result.end(), 0.0);
+        thrust::copy_if(result.begin(), result.end(), copy_result.begin(), smaller_than_zero());
+        value_type negsum = thrust::reduce(copy_result.begin(), copy_result.end(), 0.0);
+        thrust::for_each(
+                thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate_i.begin(), Sigma_i.begin(), dilution_ni.begin() ) ),
+                thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.begin() ) ),
+                generalized_lotka_volterra_functor(possum, negsum)
+        );
+        clog << t << "\n";
     };
     
     size_t m_num_species;
+    state_type m_growth_rate, m_Sigma, m_interaction, m_dilution;
 };
 
 // generator for random variable of uniform distribution U(a, b)
-struct uniform_gen {
+struct uniform_gen
+{
     uniform_gen(value_type a, value_type b): m_a(a), m_b(b) {}
     
     __host__
@@ -200,49 +231,67 @@ const size_t num_species = 10;
 // initalize parameters, set the number of species to 10 in the generalized lv equation
 
 const size_t outerloop = 200;  
-// randomization for growth_rate, Sigma, interaction and dilution
+// samplesize
 
 const size_t innerloop = 500;
-// randomization for initial condition of glv ODE
+// precision
+
+const value_type dt = 0.01;
 
 int main() {
 
     host_type growth_rate_host(num_species * outerloop)/* copy innerloop times */, Sigma_host(num_species * outerloop)/* copy innerloop times */, dilution_host(1 * outerloop) /* copy num_species*innerloop times */, interaction_host(num_species * num_species * outerloop) /* copy innerloop times */, initial_host(num_species * outerloop * innerloop);
-    // outerloop - samplesize / innerloop - precision
-    // randomize growth rate
+
+    // randomize growth rate start
     size_t dim = growth_rate_host.size();
-    host_type growth_rate_mean(dim), growth_rate_width(dim), unit_random_vec(dim);
-    host_type growth_rate_mean_host(1);
-    thrust::generate(growth_rate_mean_host.begin(), growth_rate_mean_host.end(), uniform_gen(0.1, 1.5));
-    thrust::fill(growth_rate_mean.begin(), groth_rate_mean.end(), growth_rate_mean_host[0]);
-    host_type growth_rate_width_host(1);
-    thrust::generate(growth_rate_width_host.begin(), growth_rate_width_host.end(), uniform_gen(0, growth_rate_mean_host[0]));
-    thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_host[0]);
-    thrust::generate(unit_random_vec.begin(), unit_random_vec.end(), uniform_gen(0, 1.0));
+    host_type growth_rate_mean_seed(1);
+    thrust::generate(growth_rate_mean_seed.begin(), growth_rate_mean_seed.end(), uniform_gen(0.1, 1.5));
+    state_type growth_rate_mean(dim);
+    thrust::fill(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate_mean_seed[0]);
+    host_type growth_rate_width_seed(1);
+    thrust::generate(growth_rate_width_seed.begin(), growth_rate_width_seed.end(), uniform_gen(0, growth_rate_mean_seed[0]));
+    state_type growth_rate_width(dim)
+    thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_seed[0]);
+    host_type unit_random_vec_host(dim);
+    thrust::generate(unit_random_vec_host.begin(), unit_random_vec_host.end(), uniform_gen(0, 1.0));
+    state_type unit_random_vec = unit_random_vec_host;
+    state_type growth_rate = growth_rate_host;
     thrust::for_each( 
-        thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.begin(), growth_rate_width.begin(), unit_random_vec.begin(), growth_rate_host.begin() )),
-        thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.end(), growth_rate_width.end(), unit_random_vec.end(), growth_rate_host.end() )),
+        thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.begin(), growth_rate_width.begin(), unit_random_vec.begin(), growth_rate.begin() )),
+        thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.end(), growth_rate_width.end(), unit_random_vec.end(), growth_rate.end() )),
         set_growthrate() 
     );
-    // randomize interaction
+    // randomize growth rate end
+
+    // randomize interaction start
     size_t dim = interaction_host.size()
-    host_type compete_dense(1), promote_dense(1);
-    thrust::generate(compete_dense.begin(), compete_dense.end(), uniform_gen(0.5, 1.0));
-    thrust::generate(promote_dense.begin(), promote_dense.end(), uniform_gen(0, 1 - compete_dense[0]));
-    host_type promote_mean(dim), promote_width(dim), compete_mean(dim), compete_width(dim);
-    host_type promote_mean_host(1), promote_width_host(1), compete_mean_host(1), compete_width_host(1);
-    thrust::generate(compete_mean_host.begin(), compete_mean_host.end(), uniform_gen(0.5, 2.0)); 
-    thrust::fill(compete_mean.begin(), compete_mean.end(), compete_mean_host[0]); 
-    thrust::generate(promote_mean_host.begin(), promote_mean_host.end(), uniform_gen(0.01, 1.0));
-    thrust::fill(promote_mean.begin(), promote_mean.end(), promote_mean_host[0]);
-    thrust::generate(compete_width_host.begin(), compete_width_host.end(), uniform_gen(0, compete_mean_host[0]));
-    thrust::fill(compete_width.begin(), compete_width.end(), compete_width_host[0]);
-    thrust::generate(promote_width_host.begin(), promote_width_host.end(), uniform_gen(0, promote_mean_host[0]));
-    thrust::fill(promote_width.begin(), promote_width.end(), promote_width_host[0]); 
-    // generate once, then fill the device vector
-    host_type threshold_vector(dim), unit_random_vec(dim);
-    thrust::generate(threshold_vector.begin(), threshold_vector.end(), uniform_gen(0, 1.0));
-    thrust::generate(unit_random_vec.begin(), unit_random_vec.end(), uniform_gen(0, 1.0));
+    host_type compete_dense_host(1), promote_dense_host(1);
+    thrust::generate(compete_dense_host.begin(), compete_dense_host.end(), uniform_gen(0.5, 1.0));
+    state_type compete_dense = compete_dense_host;
+    thrust::generate(promote_dense_host.begin(), promote_dense_host.end(), uniform_gen(0, 1 - compete_dense[0]));
+    state_type promote_dense = promote_dense_host;
+
+    host_type promote_mean_seed(1), promote_mean_host(dim), promote_width_seed(1), promote_width_host(dim), compete_mean_seed(1), compete_mean_host(dim), compete_width_seed(1), compete_width_host(dim);
+    thrust::generate(compete_mean_seed.begin(), compete_mean_seed.end(), uniform_gen(0.5, 2.0));
+    thrust::fill(compete_mean_host.begin(), compete_mean_host.end(), compete_mean_seed[0]);
+    state_type compete_mean = compete_mean_host;
+    thrust::generate(promote_mean_seed.begin(), promote_mean_seed.end(), uniform_gen(0.01, 1.0));
+    thrust::fill(promote_mean_host.begin(), promote_mean_host.end(), promote_mean_seed[0]);
+    state_type promote_mean = promote_mean_host;
+    thrust::generate(compete_width_seed.begin(), compete_width_seed.end(), uniform_gen(0, compete_mean_seed[0]));
+    thrust::fill(compete_width_host.begin(), compete_width_host.end(), compete_width_seed[0]);
+    state_type compete_width = compete_width_host;
+    thrust::generate(promote_width_seed.begin(), promote_width_seed.end(), uniform_gen(0, promote_mean_seed[0]));
+    thrust::fill(promote_width_host.begin(), promote_width_host.end(), promote_width_seed[0]);
+    state_type promote_width = promote_width_host;
+
+    host_type threshold_vector_host(dim), unit_random_vec_host(dim);
+    thrust::generate(threshold_vector_host.begin(), threshold_vector_host.end(), uniform_gen(0, 1.0));
+    state_type threshold_vector = threshold_vector_host;
+    thrust::generate(unit_random_vec_host.begin(), unit_random_vec_host.end(), uniform_gen(0, 1.0));
+    state_type unit_random_vec = unit_random_vec_host;
+
+    state_type interaction = interaction_host;
     thrust::transform_if( 
         thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction_host.begin() )),
         thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(), compete_mean.end(), compete_width.end(), unit_random_vec.end(), interaction_host.end() )),
@@ -260,37 +309,35 @@ int main() {
     thrust::host_vector<size_t> index_host(dim);
     thrust::sequence(index_host.begin(), index_host.end(), 1);
     thrust::for_each(index_host.begin(), index_host.end(), index_transform(num_species));
-    value_type index = index_host;
+    state_type index = index_host;
     thrust::transform_if( 
-        thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction_host.begin() )), 
-        thrust::make_zip_iterator( thrust::make_tuple( index.end(), interation_host.end() )), 
-        thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction_host.begin() )), 
+        thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction.begin() )), 
+        thrust::make_zip_iterator( thrust::make_tuple( index.end(), interation.end() )), 
+        thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction.begin() )), 
         set_minus_one(),
         is_diagonal() 
     );
+    // randomize interaction end
+
     // randomize Sigma
     thrust::generate(Sigma_host.begin(), Sigma_host.end(), uniform_gen(0, 0.5));
+    state_type Sigma = Sigma_host;
     // randomize dilution
-    thrust::for_each(dilution_host.begin(), dilution_host.end(), set_dilution(growth_rate_mean_host[0]));
+    state_type dilution = dilution_host;
+    thrust::for_each(dilution.begin(), dilution.end(), set_dilution(growth_rate_mean_seed[0]));
     // randomize initial
     thrust::generate(initial_host.begin(), initial_host.end(), uniform_gen(0, 1.0));
-    value_type initial_sum = thrust::reduce(initial_host.begin(), initial_host.end(), 0.0);
-    thrust::for_each(initial_host.begin(), initial_host.end(), normalize(initial_sum));
-
-    state_type growth_rate = growth_rate_host;
-    state_type interaction = interaction_host;
-    state_type Sigma = Sigma_host;
-    state_type dilution = dilution_host;
     state_type initial = initial_host;
-    // TODO: use curand to generate random numbers on device w/ curand kernel
+    value_type initial_sum = thrust::reduce(initial.begin(), initial.end(), 0.0);
+    thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
 
-    // TODO: solve ODE
-    generalized_lotka_volterra_system glv_system( num_species );
-    glv.set_growth_rate(growth_rate);
-    glv.set_Sigma(Sigma);
-    glv.set_interaction(interaction);
-    glv.set_dilution(dilution);
-    integrate_adaptive( make_controlled(1.0e-6, 1.0e-6, stepper_type()), glv, )
+
+    // TODO: use curand to generate random numbers on device w/ curand kernel
+    
+    double_t t = 0.0;
+
+    generalized_lotka_volterra_system glv_system( num_species, growth_rate, Sigma, interaction, dilution );
+    integrate_adaptive( make_controlled(1.0e-6, 1.0e-6, stepper_type()), glv_system, initial, 0.0, 10.0, dt);
 
     // TODO: parse results with Euclidean distance aka 2-norm
 
