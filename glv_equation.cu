@@ -27,8 +27,9 @@ typedef thrust::device_vector< value_type > state_type;
 
 struct generalized_lotka_volterra_system
 {
+    const size_t m_num_species, m_innerloop, m_outerloop;
     state_type m_growth_rate, m_Sigma, m_interaction, m_dilution;
-    state_type interaction_column, growth_rate_i, Sigma_i, interaction_i, dilution_ni;
+    state_type interaction_column, growth_rate_i, Sigma_i, interaction_i, dilution_ni;  
     
     // m_growth_rate(num_species * outerloop)/* copy innerloop times */, m_Sigma(num_species * outerloop)/* copy innerloop times */, m_dilution(1 * outerloop) /* copy num_species*innerloop times */, m_interaction(num_species * num_species * outerloop) /* copy innerloop times */ 
 
@@ -126,7 +127,7 @@ struct set_growthrate
 { 
     template<class T >
     __host__
-    void opeartor()( T& t ) {
+    void operator()( T& t ) {
         thrust::get<3>(t) = thrust::get<0>(t) - thrust::get<1>(t) + 2 * thrust::get<1>(t) * thrust::get<2>(t); // t = { growth_rate_mean, growth_rate_width, unit_random_vec, growth_rate}
     }
 };
@@ -145,7 +146,7 @@ struct is_above_compete_density
 {
     template<class T >
     __host__
-    bool opeartor()( T t )
+    bool operator()( T t )
     {
         return thrust::get<0>(t) >= thrust::get<2>(t);
     }
@@ -345,16 +346,10 @@ int main() {
     state_type initial = initial_host;
     value_type initial_sum = thrust::reduce(initial.begin(), initial.end(), 0.0);
     thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
-
-
     // TODO: use curand to generate random numbers on device w/ curand kernel
-    
-    double_t t = 0.0;
-
-    typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
 
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
-    integrate_adaptive( make_controlled(1.0e-6, 1.0e-6, stepper_type()), glv_system, initial, 0.0, 10.0, dt);
+    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-5, runge_kutta_dopri5< state_type, value_type, state_type, value_type >()), glv_system, initial, 0.0, 10.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
 
