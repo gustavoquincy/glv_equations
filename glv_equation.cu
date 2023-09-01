@@ -24,31 +24,39 @@
 typedef double_t value_type;
 typedef thrust::host_vector< value_type > host_type;
 typedef thrust::device_vector< value_type > state_type;
-typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
-
 
 struct generalized_lotka_volterra_system
 {
-    generalized_lotka_volterra_system( size_t num_species, state_type growth_rate, state_type Sigma, state_type interaction, state_type dilution )
-    : m_num_species( num_species ), m_growth_rate(growth_rate), m_Sigma(Sigma), m_interaction(interaction), m_dilution(dilution) { 
-        // normalize vectors by dimension
-        state_type growth_rate_i(m_growth_rate.size() * m_innerloop), Sigma_i(m_Sigma.size() * m_innerloop), dilution_i(m_dilution.size() * m_innerloop), interaction_i(m_interaction.size() * m_innerloop);
-        for (int i = 0; i < m_innerloop; ++i) {
-            thrust::copy(m_growth_rate.begin(), m_growth_rate.end(), growth_rate_i.begin() + i * m_growth_rate.size());
+    state_type m_growth_rate, m_Sigma, m_interaction, m_dilution;
+    state_type interaction_column, growth_rate_i, Sigma_i, interaction_i, dilution_ni, interaction_column;
+    
+    // m_growth_rate(num_species * outerloop)/* copy innerloop times */, m_Sigma(num_species * outerloop)/* copy innerloop times */, m_dilution(1 * outerloop) /* copy num_species*innerloop times */, m_interaction(num_species * num_species * outerloop) /* copy innerloop times */ 
+
+    generalized_lotka_volterra_system( state_type growth_rate, state_type Sigma, state_type interaction, state_type dilution )
+    : m_growth_rate(growth_rate), m_Sigma(Sigma), m_interaction(interaction), m_dilution(dilution) {
+        state_type growth_rate_i_scoped( m_growth_rate.size() * innerloop );
+        state_type Sigma_i_scoped( m_Sigma.size() * innerloop );
+        state_type dilution_i_scoped( m_dilution.size() * innerloop );
+        state_type interaction_i_scoped( m_interaction.size() * innerloop );
+        for (int i = 0; i < innerloop; ++i) {
+            thrust::copy(m_growth_rate.begin(), m_growth_rate.end(), growth_rate_i_scoped.begin() + i * m_growth_rate.size());
             thrust::copy(m_Sigma.begin(), m_Sigma.end(), Sigma_i.begin() + i * m_Sigma.size());
             thrust::copy(m_dilution.begin(), m_dilution.end(), dilution_i.begin() + i * m_dilution.size());
             thrust::copy(m_interaction.begin(), m_interaction.end(), interaction_i.begin() + i * m_interaction.size());
         }
-        state_type dilution_ni(dilution_i.size() * m_outerloop)
-        for (int i = 0; i < m_outerloop; ++i) {
-            thrust::copy(dilution_i.begin(), dilution_i.end(), dilution_ni.begin() + i * dilution_i.size());
-        }
-        state_type interaction_column(growth_rate_i.size());
-        for (int i = 0; i < m_num_species; ++i) {
-            for (int j = 0; j < m_num_sepecies * m_innerloop * m_outerloop; ++j) {
+        growth_rate_i = growth_rate_i_scoped;
+        Sigma_i = Sigma_i_scoped;
+        interaction_i = interaction_i_scoped;
+        state_type dilution_ni_scoped( dilution_i_scoped.size() * num_species );
+        state_type interaction_column_scoped( num_species * innerloop * outerloop );
+        for (int i = 0; i < num_species; ++i) {
+            thrust::copy(dilution_i_scoped.begin(), dilution_i_scoped.end(), dilution_ni_scoped.begin() + i * dilution_i_scoped.size());
+            for (int j = 0; j < num_species * innerloop * outerloop; ++j) {
                 interaction_column[j] = m_interaction[ i + m_num_species * j ];
             }     
         }
+        dilution_ni = dilution_ni_scoped;
+        interaction_column = interaction_column_scoped;
     }
 
     struct generalized_lotka_volterra_functor
@@ -74,8 +82,8 @@ struct generalized_lotka_volterra_system
     struct smaller_than_zero
     {
         __host__ __device__
-        bool operator(value_type x) { return x < 0; }
-    }
+        bool operator()(value_type x) { return x < 0; }
+    };
 
     void operator()( state_type& y , state_type& dydt, value_type t)
     {
@@ -93,11 +101,9 @@ struct generalized_lotka_volterra_system
                 thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.begin() ) ),
                 generalized_lotka_volterra_functor(possum, negsum)
         );
-        clog << t << "\n";
-    };
-    
-    size_t m_num_species;
-    state_type m_growth_rate, m_Sigma, m_interaction, m_dilution;
+        std::clog << t << "\n";
+    }
+
 };
 
 // generator for random variable of uniform distribution U(a, b)
@@ -107,7 +113,7 @@ struct uniform_gen
     
     __host__
     value_type operator()() {
-        pcg64 rng(pcg_extras::seed_seq_from<std::random_device{});
+        pcg64 rng(pcg_extras::seed_seq_from<std::random_device>{});
         // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
         std::uniform_real_distribution<double_t> uniform_dist(m_a, m_b);
         return uniform_dist(rng);
@@ -177,10 +183,10 @@ struct index_transform
     __host__
     void operator()(size_t& idx)
     {
-        bool is_diag = thrust::get<0>(t) % (m_dim + 1) == m_i;
+        bool is_diag = idx % (m_num_species + 1) == m_i;
         if ( is_diag ) m_counter += 1;
-        if ( m_counter == m_dim ) {
-            m_i = (m_i + 1) % (m_dim + 1);
+        if ( m_counter == m_num_species ) {
+            m_i = (m_i + 1) % (m_num_species + 1);
             m_counter = 0;
         }
         idx = is_diag;
@@ -225,15 +231,17 @@ struct normalize
     }
 
     value_type m_normalized_by;
-}
+};
 
 struct is_diagonal
 {
-    template class< T >
+    template<class T >
+    __host__
     bool operator()(T t) /* t = { index, interaction }*/ {
         return thrust::get<0>(t);
     }
 };
+
 const size_t num_species = 10;
 // initalize parameters, set the number of species to 10 in the generalized lv equation
 
@@ -257,7 +265,7 @@ int main() {
     thrust::fill(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate_mean_seed[0]);
     host_type growth_rate_width_seed(1);
     thrust::generate(growth_rate_width_seed.begin(), growth_rate_width_seed.end(), uniform_gen(0, growth_rate_mean_seed[0]));
-    state_type growth_rate_width(dim)
+    state_type growth_rate_width(dim);
     thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_seed[0]);
     host_type unit_random_vec_host(dim);
     thrust::generate(unit_random_vec_host.begin(), unit_random_vec_host.end(), uniform_gen(0, 1.0));
@@ -271,7 +279,7 @@ int main() {
     // randomize growth rate end
 
     // randomize interaction start
-    size_t dim = interaction_host.size()
+    dim = interaction_host.size();
     host_type compete_dense_host(1), promote_dense_host(1);
     thrust::generate(compete_dense_host.begin(), compete_dense_host.end(), uniform_gen(0.5, 1.0));
     state_type compete_dense = compete_dense_host;
@@ -292,11 +300,11 @@ int main() {
     thrust::fill(promote_width_host.begin(), promote_width_host.end(), promote_width_seed[0]);
     state_type promote_width = promote_width_host;
 
-    host_type threshold_vector_host(dim), unit_random_vec_host(dim);
+    host_type threshold_vector_host(dim);
     thrust::generate(threshold_vector_host.begin(), threshold_vector_host.end(), uniform_gen(0, 1.0));
     state_type threshold_vector = threshold_vector_host;
     thrust::generate(unit_random_vec_host.begin(), unit_random_vec_host.end(), uniform_gen(0, 1.0));
-    state_type unit_random_vec = unit_random_vec_host;
+    unit_random_vec = unit_random_vec_host;
 
     state_type interaction = interaction_host;
     thrust::transform_if( 
@@ -319,7 +327,7 @@ int main() {
     state_type index = index_host;
     thrust::transform_if( 
         thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction.begin() )), 
-        thrust::make_zip_iterator( thrust::make_tuple( index.end(), interation.end() )), 
+        thrust::make_zip_iterator( thrust::make_tuple( index.end(), interaction.end() )), 
         thrust::make_zip_iterator( thrust::make_tuple( index.begin(), interaction.begin() )), 
         set_minus_one(),
         is_diagonal() 
@@ -343,7 +351,9 @@ int main() {
     
     double_t t = 0.0;
 
-    generalized_lotka_volterra_system glv_system( num_species, growth_rate, Sigma, interaction, dilution );
+    typedef runge_kutta_dopri5< state_type, value_type, state_type, value_type > stepper_type;
+
+    generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
     integrate_adaptive( make_controlled(1.0e-6, 1.0e-6, stepper_type()), glv_system, initial, 0.0, 10.0, dt);
 
     // TODO: parse results with Euclidean distance aka 2-norm
