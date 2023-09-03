@@ -21,7 +21,9 @@
 #include "pcg-cpp-0.98/include/pcg_random.hpp"
 //using pcg c++ implementation, pcg64, compilation requires -std=c++11 flag
 
-typedef double_t value_type;
+using namespace boost::numeric::odeint;
+
+typedef double value_type;
 typedef thrust::host_vector< value_type > host_type;
 typedef thrust::device_vector< value_type > state_type;
 
@@ -252,9 +254,12 @@ const size_t outerloop = 200;
 const size_t innerloop = 500;
 // precision
 
-const value_type dt = 0.01;
-
-int main() {
+int main( int arc, char* argv[] ) 
+{
+    int driver_version, runtime_version;
+    cudaDriverGetVersion(&driver_version);
+    cudaRuntimeGetVersion(&runtime_version);
+    std::cout << driver_version << "\t" << runtime_version << std::endl;
 
     host_type growth_rate_host(num_species * outerloop)/* copy innerloop times */, Sigma_host(num_species * outerloop)/* copy innerloop times */, dilution_host(1 * outerloop) /* copy num_species*innerloop times */, interaction_host(num_species * num_species * outerloop) /* copy innerloop times */, initial_host(num_species * outerloop * innerloop);
 
@@ -348,8 +353,10 @@ int main() {
     thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
     // TODO: use curand to generate random numbers on device w/ curand kernel
 
+    typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
-    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-5, runge_kutta_dopri5< state_type, value_type, state_type, value_type >()), glv_system, initial, 0.0, 10.0, 0.01);
+    
+    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial, 0.0, 10.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
 
