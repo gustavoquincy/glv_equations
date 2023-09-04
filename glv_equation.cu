@@ -128,7 +128,7 @@ struct uniform_gen
 struct set_growthrate
 { 
     template<class T >
-    __host__
+    __host__ __device__
     void operator()( T& t ) {
         thrust::get<3>(t) = thrust::get<0>(t) - thrust::get<1>(t) + 2 * thrust::get<1>(t) * thrust::get<2>(t); // t = { growth_rate_mean, growth_rate_width, unit_random_vec, growth_rate}
     }
@@ -218,7 +218,7 @@ struct set_dilution
         host_type random_vec_a(1), random_vec_b(1);
         thrust::generate(random_vec_a.begin(), random_vec_a.end(), uniform_gen(0, m_growth_rate_mean));
         thrust::generate(random_vec_b.begin(), random_vec_b.end(), uniform_gen(0, 0.3));
-        di = random_vec_a[0] < random_vec_b[0] ? random_vec_a[0] :random_vec_b[0];
+        di = random_vec_a[0] < random_vec_b[0] ? random_vec_a[0] : random_vec_b[0];
     }
 
     value_type m_growth_rate_mean;
@@ -259,7 +259,7 @@ int main( int arc, char* argv[] )
     int driver_version, runtime_version;
     cudaDriverGetVersion(&driver_version);
     cudaRuntimeGetVersion(&runtime_version);
-    std::cout << driver_version << "\t" << runtime_version << std::endl;
+    std::cout << "driver version " << driver_version << "\t" << "runtime version " << runtime_version << std::endl;
 
     host_type growth_rate_host(num_species * outerloop)/* copy innerloop times */, Sigma_host(num_species * outerloop)/* copy innerloop times */, dilution_host(1 * outerloop) /* copy num_species*innerloop times */, interaction_host(num_species * num_species * outerloop) /* copy innerloop times */, initial_host(num_species * outerloop * innerloop);
 
@@ -344,8 +344,8 @@ int main( int arc, char* argv[] )
     thrust::generate(Sigma_host.begin(), Sigma_host.end(), uniform_gen(0, 0.5));
     state_type Sigma = Sigma_host;
     // randomize dilution
+    thrust::for_each(dilution_host.begin(), dilution_host.end(), set_dilution(growth_rate_mean_seed[0]));
     state_type dilution = dilution_host;
-    thrust::for_each(dilution.begin(), dilution.end(), set_dilution(growth_rate_mean_seed[0]));
     // randomize initial
     thrust::generate(initial_host.begin(), initial_host.end(), uniform_gen(0, 1.0));
     state_type initial = initial_host;
