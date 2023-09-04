@@ -137,7 +137,7 @@ struct set_growthrate
 struct is_below_promote_density
 {   
     template<class T >
-    __host__
+    __host__ __device__
     bool operator()( T t ) /* t = { 0 threshold_vector, 1 promote_dense, 2 compete_dense, 3 promote_mean, 4 promote_width, 5 compete_mean, 6 compete_width, 7 unit_random_vec, 8 interaction } (arity = 9)*/
     {
         return thrust::get<0>(t) <= thrust::get<1>(t);
@@ -147,7 +147,7 @@ struct is_below_promote_density
 struct is_above_compete_density
 {
     template<class T >
-    __host__
+    __host__ __device__
     bool operator()( T t )
     {
         return thrust::get<0>(t) >= thrust::get<2>(t);
@@ -157,7 +157,7 @@ struct is_above_compete_density
 struct set_promote_value
 {
     template<class T >
-    __host__
+    __host__ __device__
     T operator()( T t )
     {
         thrust::get<8>(t) = thrust::get<3>(t) - thrust::get<4>(t) + 2 * thrust::get<4>(t) * thrust::get<7>(t);
@@ -168,7 +168,7 @@ struct set_promote_value
 struct set_compete_value
 {
     template<class T >
-    __host__
+    __host__ __device__
     T operator()( T t )
     {
         thrust::get<8>(t) = -1 * (thrust::get<5>(t) - thrust::get<6>(t) + 2 * thrust::get<6>(t) * thrust::get<7>(t));
@@ -202,7 +202,7 @@ struct index_transform
 struct set_minus_one
 {
     template<class T >
-    __host__
+    __host__ __device__
     T operator()( T t ) {
         thrust::get<1>(t) = -1.0;
         return t;
@@ -239,7 +239,7 @@ struct normalize
 struct is_diagonal
 {
     template<class T >
-    __host__
+    __host__ __device__
     bool operator()(T t) /* t = { index, interaction }*/ {
         return thrust::get<0>(t);
     }
@@ -314,18 +314,18 @@ int main( int arc, char* argv[] )
 
     state_type interaction = interaction_host;
     thrust::transform_if( 
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction_host.begin() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(), compete_mean.end(), compete_width.end(), unit_random_vec.end(), interaction_host.end() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction_host.begin() )),
-        is_below_promote_density(),
-        set_promote_value() 
+        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
+        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(), compete_mean.end(), compete_width.end(), unit_random_vec.end(), interaction.end() )),
+        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
+        set_promote_value(),
+        is_below_promote_density() 
     );
     thrust::transform_if( 
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction_host.begin() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(), compete_mean.end(), compete_width.end(), unit_random_vec.end(), interaction_host.end() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction_host.begin() )),
-        is_above_compete_density(),
-        set_compete_value() 
+        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
+        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(), compete_mean.end(), compete_width.end(), unit_random_vec.end(), interaction.end() )),
+        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
+        set_compete_value(),
+        is_above_compete_density()
     );
     thrust::host_vector<size_t> index_host(dim);
     thrust::sequence(index_host.begin(), index_host.end(), 1);
