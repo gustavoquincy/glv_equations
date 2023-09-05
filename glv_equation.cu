@@ -50,16 +50,16 @@ struct generalized_lotka_volterra_system
         growth_rate_i = growth_rate_i_scoped;
         Sigma_i = Sigma_i_scoped;
         interaction_i = interaction_i_scoped;
-        state_type dilution_ni_scoped( dilution_i_scoped.size() * m_num_species );
-        state_type interaction_column_scoped( m_num_species * m_innerloop * m_outerloop );
+        state_type dilution_ni_scoped( dilution_i_scoped.size() * m_num_/species );
+        //state_type interaction_column_scoped( m_num_species * m_innerloop * m_outerloop );
         for (int i = 0; i < m_num_species; ++i) {
             thrust::copy(dilution_i_scoped.begin(), dilution_i_scoped.end(), dilution_ni_scoped.begin() + i * dilution_i_scoped.size());
-            for (int j = 0; j < m_num_species * m_innerloop * m_outerloop; ++j) {
-                interaction_column[j] = m_interaction[ i + m_num_species * j ];
-            }     
+            //for (int j = 0; j < m_num_species * m_innerloop * m_outerloop; ++j) {
+            //    interaction_column[j] = m_interaction[ i + m_num_species * j ];
+            //}     
         }
         dilution_ni = dilution_ni_scoped;
-        interaction_column = interaction_column_scoped;
+        //interaction_column = interaction_column_scoped;
     }
 
     struct generalized_lotka_volterra_functor
@@ -91,6 +91,13 @@ struct generalized_lotka_volterra_system
     void operator()( state_type& y , state_type& dydt, value_type t)
     {
         state_type result(y.size());
+        // Column interaction times y, noi piecewise multiplication
+        for (int i=0; i<n; ++i) {
+            interaction[ i * noi ]
+        }
+        // divide the result into oi parts, find pos_sum and neg_sum of each part
+
+        // then we have noi pos_sum and noi neg_sum
         thrust::transform(y.begin(), y.end(), interaction_column.begin(), result.begin(), thrust::multiplies<value_type>());
         state_type copy_result(y.size());
         thrust::fill(copy_result.begin(), copy_result.end(), 0.0);
@@ -352,10 +359,10 @@ int main( int arc, char* argv[] )
     value_type initial_sum = thrust::reduce(initial.begin(), initial.end(), 0.0);
     thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
     // TODO: use curand to generate random numbers on device w/ curand kernel
-
     typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
     
+    std::clog << "initial size" << initial.size() << "\n";
     integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial, 0.0, 10.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
