@@ -61,12 +61,12 @@ struct generalized_lotka_volterra_system
     {
         template< class Tuple >
         __host__ __device__
-        void operator()( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, dilution, pos_sum, neg_sum } (arity = 7)*/
+        void operator()( Tuple t )/* tuple t = { y, dydt, growth_rate, Sigma, dilution, pos_sum, neg_sum } (arity = 7)*/
         {   
             thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + thrust::get<6>(t) + thrust::get<3>(t) * thrust::get<5>(t) / ( 1 + thrust::get<5>(t) )) - thrust::get<4>(t) * thrust::get<0>(t);
         }
     };
-
+/*  
     std::pair<value_type, value_type> find_sum( host_type vector, size_t start_index ) {
         value_type pos_sum = 0.0;
         value_type neg_sum = 0.0;
@@ -76,6 +76,8 @@ struct generalized_lotka_volterra_system
         }
         return std::make_pair(pos_sum, neg_sum);
     } 
+    */
+
 
     void operator()( state_type& y , state_type& dydt, value_type t)
     {
@@ -92,8 +94,14 @@ struct generalized_lotka_volterra_system
         result_host = result;
         host_type pos_sum_host( m_num_species * m_innerloop * m_outerloop ), neg_sum_host( m_num_species * m_innerloop * m_outerloop );
         for (int i=0; i< m_num_species * m_innerloop * m_outerloop; ++i) {
-            pos_sum_host[i] = find_sum( result_host, i * m_num_species ).first;
-            neg_sum_host[i] = find_sum( result_host, i * m_num_species ).second;
+            value_type pos_sum = 0.0;
+            value_type neg_sum = 0.0;
+            for (int j=0; j < m_num_species; ++j) {
+                value_type vec_val = result_host[ i * m_num_species + j ];
+                vec_val > 0 ? pos_sum += vec_val : neg_sum += vec_val;
+            }
+            pos_sum_host[i] = pos_sum;
+            neg_sum_host[i] = neg_sum;
         }
         // then we have noi-dim pos_sum and noi-dim neg_sum
         state_type pos_sum( pos_sum_host.size() ), neg_sum( neg_sum_host.size() );
@@ -105,6 +113,10 @@ struct generalized_lotka_volterra_system
                 thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.end(), pos_sum.end(), neg_sum.end() ) ),
                 generalized_lotka_volterra_functor()
         );
+        std::clog << "10 species abundance" << "\n";
+        for (int i=0; i<y.size(); ++i) {
+            std::clog << y[i] << std::endl;
+        }
         std::clog << t << "\n";
     }
 
@@ -356,8 +368,7 @@ int main( int arc, char* argv[] )
     typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
     
-    std::clog << "initial size" << initial.size() << "\n";
-    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial, 0.0, 10.0, 0.01);
+    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
 
