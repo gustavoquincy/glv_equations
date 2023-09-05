@@ -30,8 +30,8 @@ typedef thrust::device_vector< value_type > state_type;
 struct generalized_lotka_volterra_system
 {
     const size_t m_num_species, m_innerloop, m_outerloop;
-    state_type m_growth_rate, m_Sigma, m_interaction, m_dilution;
-    state_type interaction_column, growth_rate_i, Sigma_i, interaction_i, dilution_ni;  
+    state_type m_growth_rate, m_Sigma, m_interaction, m_dilution; //pass-in value
+    state_type growth_rate_i, Sigma_i, interaction_i, dilution_ni;  //operator-use value
     
     // m_growth_rate(num_species * outerloop)/* copy innerloop times */, m_Sigma(num_species * outerloop)/* copy innerloop times */, m_dilution(1 * outerloop) /* copy num_species*innerloop times */, m_interaction(num_species * num_species * outerloop) /* copy innerloop times */ 
 
@@ -51,67 +51,59 @@ struct generalized_lotka_volterra_system
         Sigma_i = Sigma_i_scoped;
         interaction_i = interaction_i_scoped;
         state_type dilution_ni_scoped( dilution_i_scoped.size() * m_num_/species );
-        //state_type interaction_column_scoped( m_num_species * m_innerloop * m_outerloop );
         for (int i = 0; i < m_num_species; ++i) {
             thrust::copy(dilution_i_scoped.begin(), dilution_i_scoped.end(), dilution_ni_scoped.begin() + i * dilution_i_scoped.size());
-            //for (int j = 0; j < m_num_species * m_innerloop * m_outerloop; ++j) {
-            //    interaction_column[j] = m_interaction[ i + m_num_species * j ];
-            //}     
         }
         dilution_ni = dilution_ni_scoped;
-        //interaction_column = interaction_column_scoped;
     }
 
     struct generalized_lotka_volterra_functor
     {
-        generalized_lotka_volterra_functor( value_type pos_sum, value_type neg_sum ): m_pos_sum(pos_sum), m_neg_sum(neg_sum) { }
-
         template< class Tuple >
         __host__ __device__
-        void operator()( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, dilution } */
+        void operator()( Tuple t ) /* tuple t = { y, dydt, growth_rate, Sigma, dilution, pos_sum, neg_sum } (arity = 7)*/
         {   
-            thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + m_neg_sum + thrust::get<3>(t) * m_pos_sum / ( 1 + m_pos_sum )) - thrust::get<4>(t) * thrust::get<0>(t);
+            thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + thrust::get<6>(t) + thrust::get<3>(t) * thrust::get<5>(t) / ( 1 + thrust::get<5>(t) )) - thrust::get<4>(t) * thrust::get<0>(t);
         }
-
-        value_type m_pos_sum, m_neg_sum;
     };
 
-    struct larger_than_zero
-    {   
-        __host__ __device__
-        bool operator()(value_type x) { return x > 0; }
-    };
-
-    struct smaller_than_zero
-    {
-        __host__ __device__
-        bool operator()(value_type x) { return x < 0; }
-    };
+    std::pair<value_type, value_type> find_sum( host_type vector, size_t start_index, size_t len=m_num_species ) {
+        value_type pos_sum = 0.0;
+        value_type neg_sum = 0.0;
+        for (int i=0; i < m_num_species; ++i) {
+            value_type vector_value = vector[ start_index + i ];
+            vector_value > 0 ? pos_sum += vector_value : neg_sum += vector_value;
+        }
+        return std::make_pair(pos_sum, neg_sum);
+    } 
 
     void operator()( state_type& y , state_type& dydt, value_type t)
     {
-        state_type result(y.size());
         // copy y n times to make it n^2*io
-        for (int i=0; i<n; ++i) {
-            interaction[ i * noi ]
+        state_type y_n( y.size() * m_num_species );
+        for (int i=0; i < m_num_species; ++i) {
+            thrust::copy( y.begin(), y.end(), y_n.begin() + i * y.size() );
         }
         // multiply interaction with y piecewisely
-        
+        state_type result( interaction_i.size() );
+        thrust::transform( y_n.begin(), y_n.end(), interaction_i.begin(), result.begin(), thrust::multiplies<value_type>() );
         // find pos_sum and neg_sum for every n in the result vector
-
+        host_type result_host( result.size() );
+        result_host = result;
+        host_type pos_sum_host( m_num_species * m_innerloop * m_outerloop ), neg_sum_host( m_num_species * m_innerloop * m_outerloop );
+        for (int i=0; i< m_num_species * m_innerloop * m_outerloop; ++i) {
+            pos_sum_host[i] = find_sum( result_host, i * m_num_species ).first;
+            neg_sum_host[i] = find_sum( result_host, i * m_num_species ).second;
+        }
         // then we have noi-dim pos_sum and noi-dim neg_sum
-        thrust::transform(y.begin(), y.end(), interaction_column.begin(), result.begin(), thrust::multiplies<value_type>());
-        state_type copy_result(y.size());
-        thrust::fill(copy_result.begin(), copy_result.end(), 0.0);
-        thrust::copy_if(result.begin(), result.end(), copy_result.begin(), larger_than_zero());
-        value_type possum = thrust::reduce(copy_result.begin(), copy_result.end(), 0.0);
-        thrust::fill(copy_result.begin(), copy_result.end(), 0.0);
-        thrust::copy_if(result.begin(), result.end(), copy_result.begin(), smaller_than_zero());
-        value_type negsum = thrust::reduce(copy_result.begin(), copy_result.end(), 0.0);
+        state_type pos_sum( pos_sum_host.size() ), neg_sum( neg_sum_host.size() );
+        pos_sum = pos_sum_host;
+        neg_sum = neg_sum_host;
+
         thrust::for_each(
-                thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate_i.begin(), Sigma_i.begin(), dilution_ni.begin() ) ),
-                thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.begin() ) ),
-                generalized_lotka_volterra_functor(possum, negsum)
+                thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate_i.begin(), Sigma_i.begin(), dilution_ni.begin(), pos_sum.begin(), neg_sum.begin() ) ),
+                thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.end(), pos_sum.end(), neg_sum.end() ) ),
+                generalized_lotka_volterra_functor()
         );
         std::clog << t << "\n";
     }
