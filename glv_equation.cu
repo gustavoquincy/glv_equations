@@ -91,13 +91,15 @@ struct generalized_lotka_volterra_system
     void operator()( state_type& y , state_type& dydt, value_type t)
     {
         state_type result(y.size());
-        // Column interaction times y, noi piecewise multiplication
+        // copy y n times to make it n^2*io
         for (int i=0; i<n; ++i) {
             interaction[ i * noi ]
         }
-        // divide the result into oi parts, find pos_sum and neg_sum of each part
+        // multiply interaction with y piecewisely
+        
+        // find pos_sum and neg_sum for every n in the result vector
 
-        // then we have noi pos_sum and noi neg_sum
+        // then we have noi-dim pos_sum and noi-dim neg_sum
         thrust::transform(y.begin(), y.end(), interaction_column.begin(), result.begin(), thrust::multiplies<value_type>());
         state_type copy_result(y.size());
         thrust::fill(copy_result.begin(), copy_result.end(), 0.0);
