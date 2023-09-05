@@ -50,7 +50,7 @@ struct generalized_lotka_volterra_system
         growth_rate_i = growth_rate_i_scoped;
         Sigma_i = Sigma_i_scoped;
         interaction_i = interaction_i_scoped;
-        state_type dilution_ni_scoped( dilution_i_scoped.size() * m_num_/species );
+        state_type dilution_ni_scoped( dilution_i_scoped.size() * m_num_species );
         for (int i = 0; i < m_num_species; ++i) {
             thrust::copy(dilution_i_scoped.begin(), dilution_i_scoped.end(), dilution_ni_scoped.begin() + i * dilution_i_scoped.size());
         }
@@ -67,7 +67,7 @@ struct generalized_lotka_volterra_system
         }
     };
 
-    std::pair<value_type, value_type> find_sum( host_type vector, size_t start_index, size_t len=m_num_species ) {
+    std::pair<value_type, value_type> find_sum( host_type vector, size_t start_index ) {
         value_type pos_sum = 0.0;
         value_type neg_sum = 0.0;
         for (int i=0; i < m_num_species; ++i) {
