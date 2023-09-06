@@ -3,3 +3,10 @@ sg_multiple*
 a.out
 *err
 cpp/
+myfunction*
+.glv_equation*
+glv.h
+glv.cpp
+glv_equation.h
+lorenz_parameters*
+
