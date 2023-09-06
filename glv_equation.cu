@@ -258,13 +258,13 @@ struct is_diagonal
     }
 };
 
-const size_t num_species = 10;
+const size_t num_species = 3; //10
 // initalize parameters, set the number of species to 10 in the generalized lv equation
 
-const size_t outerloop = 200;  
+const size_t outerloop = 20; //200  
 // samplesize
 
-const size_t innerloop = 500;
+const size_t innerloop = 200; //500
 // precision
 
 int main( int arc, char* argv[] ) 
@@ -371,7 +371,7 @@ int main( int arc, char* argv[] )
     integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
-
+    
 
     return 0;
 }
