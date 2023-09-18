@@ -17,6 +17,10 @@
 #include <thrust/generate.h>
 #include <thrust/reduce.h>
 
+// #include <arrow/api.h>
+// #include <arrow/csv/api.h>
+// #include <arrow/io/api.h>
+
 
 #include "pcg-cpp-0.98/include/pcg_random.hpp"
 //using pcg c++ implementation, pcg64, compilation requires -std=c++11 flag
@@ -258,13 +262,13 @@ struct is_diagonal
     }
 };
 
-const size_t num_species = 3; //10
+const size_t num_species = 10; //10
 // initalize parameters, set the number of species to 10 in the generalized lv equation
 
-const size_t outerloop = 20; //200  
+const size_t outerloop = 1; //200  
 // samplesize
 
-const size_t innerloop = 200; //500
+const size_t innerloop = 1; //500
 // precision
 
 int main( int arc, char* argv[] ) 
@@ -279,11 +283,11 @@ int main( int arc, char* argv[] )
     // randomize growth rate start
     size_t dim = growth_rate_host.size();
     host_type growth_rate_mean_seed(1);
-    thrust::generate(growth_rate_mean_seed.begin(), growth_rate_mean_seed.end(), uniform_gen(0.1, 1.5));
+    thrust::generate(growth_rate_mean_seed.begin(), growth_rate_mean_seed.end(), uniform_gen(0.5, 1.5));
     state_type growth_rate_mean(dim);
     thrust::fill(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate_mean_seed[0]);
     host_type growth_rate_width_seed(1);
-    thrust::generate(growth_rate_width_seed.begin(), growth_rate_width_seed.end(), uniform_gen(0, growth_rate_mean_seed[0]));
+    thrust::generate(growth_rate_width_seed.begin(), growth_rate_width_seed.end(), uniform_gen(0, 0.1));
     state_type growth_rate_width(dim);
     thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_seed[0]);
     host_type unit_random_vec_host(dim);
@@ -300,19 +304,19 @@ int main( int arc, char* argv[] )
     // randomize interaction start
     dim = interaction_host.size();
     host_type compete_dense_host(1), promote_dense_host(1);
-    thrust::generate(compete_dense_host.begin(), compete_dense_host.end(), uniform_gen(0.5, 1.0));
+    thrust::generate(compete_dense_host.begin(), compete_dense_host.end(), uniform_gen(1.0, 1.0));
     state_type compete_dense = compete_dense_host;
     thrust::generate(promote_dense_host.begin(), promote_dense_host.end(), uniform_gen(0, 1 - compete_dense[0]));
     state_type promote_dense = promote_dense_host;
 
     host_type promote_mean_seed(1), promote_mean_host(dim), promote_width_seed(1), promote_width_host(dim), compete_mean_seed(1), compete_mean_host(dim), compete_width_seed(1), compete_width_host(dim);
-    thrust::generate(compete_mean_seed.begin(), compete_mean_seed.end(), uniform_gen(0.5, 2.0));
+    thrust::generate(compete_mean_seed.begin(), compete_mean_seed.end(), uniform_gen(1.0, 2.0));
     thrust::fill(compete_mean_host.begin(), compete_mean_host.end(), compete_mean_seed[0]);
     state_type compete_mean = compete_mean_host;
     thrust::generate(promote_mean_seed.begin(), promote_mean_seed.end(), uniform_gen(0.01, 1.0));
     thrust::fill(promote_mean_host.begin(), promote_mean_host.end(), promote_mean_seed[0]);
     state_type promote_mean = promote_mean_host;
-    thrust::generate(compete_width_seed.begin(), compete_width_seed.end(), uniform_gen(0, compete_mean_seed[0]));
+    thrust::generate(compete_width_seed.begin(), compete_width_seed.end(), uniform_gen(0, 0));
     thrust::fill(compete_width_host.begin(), compete_width_host.end(), compete_width_seed[0]);
     state_type compete_width = compete_width_host;
     thrust::generate(promote_width_seed.begin(), promote_width_seed.end(), uniform_gen(0, promote_mean_seed[0]));
@@ -364,11 +368,16 @@ int main( int arc, char* argv[] )
     state_type initial = initial_host;
     value_type initial_sum = thrust::reduce(initial.begin(), initial.end(), 0.0);
     thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
-    // TODO: use curand to generate random numbers on device w/ curand kernel
+    // TODO: rewrite with curand
+
+
+    // TODO:: store the landscape/initial condition as arrow::Table and output as csv 
+    // a table with schema "growth_rate_mean" "growth_rate_width" "growth_rate" "promote_density" "promote_mean" "promote_width" "compete_density" "compete_mean" "compete_width" "interaction" "dilution" "sigma" 
+    
     typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
     
-    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1.0, 0.01);
+    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1000.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
     
