@@ -17,45 +17,19 @@
 #include <thrust/generate.h>
 #include <thrust/reduce.h>
 
-#include <arrow/api.h>
-#include <arrow/csv/api.h>
-#include <arrow/io/api.h>
-#include <arrow/compute/api.h>
-#include <parquet/arrow/writer.h>
-#include <arrow/util/type_fwd.h>
+// #include <arrow/api.h>
+// #include <arrow/csv/api.h>
+// #include <arrow/io/api.h>
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <cuda_runtime.h>
-#include <curand_kernel.h>
-#include <curand.h>
-#include <omp.h>
+
+#include "pcg-cpp-0.98/include/pcg_random.hpp"
+//using pcg c++ implementation, pcg64, compilation requires -std=c++11 flag
 
 using namespace boost::numeric::odeint;
-
 
 typedef double value_type;
 typedef thrust::host_vector< value_type > host_type;
 typedef thrust::device_vector< value_type > state_type;
-
-#define CUDA_CALL(x) do { if((x) != cudaSuccess) { printf("Error at %s:%d\n", __FILE__,__LINE__); return EXIT_FAILURE; }} while(0)
-
-__global__ void setup_kernel(curandState *state, int seed)
-{
-  int id = threadIdx.x + blockIdx.x * blockDim.x;
-  /* Each thread gets device index seed, a different sequence number, no offset */
-  curand_init(seed, id, 0, &state[id]);
-}
-
-__global__ void generate_uniform_kernel(curandState *state, double_t *result, int sampleSize)
-{
-  int id = threadIdx.x + blockIdx.x * blockDim.x;
-  curandState localState = state[id];
-  for (int i = 0; i < sampleSize; ++i) {
-    curand_uniform_double(&localState);
-  }
-  state[id] = localState;
-}
 
 struct generalized_lotka_volterra_system
 {
@@ -96,6 +70,17 @@ struct generalized_lotka_volterra_system
             thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + thrust::get<6>(t) + thrust::get<3>(t) * thrust::get<5>(t) / ( 1 + thrust::get<5>(t) )) - thrust::get<4>(t) * thrust::get<0>(t);
         }
     };
+/*  
+    std::pair<value_type, value_type> find_sum( host_type vector, size_t start_index ) {
+        value_type pos_sum = 0.0;
+        value_type neg_sum = 0.0;
+        for (int i=0; i < m_num_species; ++i) {
+            value_type vector_value = vector[ start_index + i ];
+            vector_value > 0 ? pos_sum += vector_value : neg_sum += vector_value;
+        }
+        return std::make_pair(pos_sum, neg_sum);
+    } 
+    */
 
 
     void operator()( state_type& y , state_type& dydt, value_type t)
@@ -127,20 +112,15 @@ struct generalized_lotka_volterra_system
         pos_sum = pos_sum_host;
         neg_sum = neg_sum_host;
 
-
-
         thrust::for_each(
                 thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate_i.begin(), Sigma_i.begin(), dilution_ni.begin(), pos_sum.begin(), neg_sum.begin() ) ),
                 thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.end(), pos_sum.end(), neg_sum.end() ) ),
                 generalized_lotka_volterra_functor()
         );
-
         std::clog << "10 species abundance" << "\n";
         for (int i=0; i<y.size(); ++i) {
             std::clog << y[i] << std::endl;
-            // store y
         }
-        // write to arrow object once only
         std::clog << t << "\n";
     }
 
@@ -162,7 +142,6 @@ struct uniform_gen
     value_type m_a, m_b;
 };
 
-#pragma region
 struct set_growthrate
 { 
     template<class T >
@@ -282,38 +261,33 @@ struct is_diagonal
         return thrust::get<0>(t);
     }
 };
-#pragma endregion
 
-const size_t num_species = 3; //10
+const size_t num_species = 10; //10
 // initalize parameters, set the number of species to 10 in the generalized lv equation
 
-const size_t outerloop = 20; //200  
+const size_t outerloop = 1; //200  
 // samplesize
 
-const size_t innerloop = 200; //500
+const size_t innerloop = 1; //500
 // precision
-
-const unsigned int threadPerBlock = 1024;
-const unsigned int blockCount = 1024;
-const unsigned int totalThreads = threadPerblock * blockCount;
 
 int main( int arc, char* argv[] ) 
 {
-    int deviceCount;
-    cudaGetDeviceCount(&deviceCount);
+    int driver_version, runtime_version;
+    cudaDriverGetVersion(&driver_version);
+    cudaRuntimeGetVersion(&runtime_version);
+    std::cout << "driver version " << driver_version << "\t" << "runtime version " << runtime_version << std::endl;
 
     host_type growth_rate_host(num_species * outerloop)/* copy innerloop times */, Sigma_host(num_species * outerloop)/* copy innerloop times */, dilution_host(1 * outerloop) /* copy num_species*innerloop times */, interaction_host(num_species * num_species * outerloop) /* copy innerloop times */, initial_host(num_species * outerloop * innerloop);
-    
-    // initialization steps
-    #pragma region
+
     // randomize growth rate start
     size_t dim = growth_rate_host.size();
     host_type growth_rate_mean_seed(1);
-    thrust::generate(growth_rate_mean_seed.begin(), growth_rate_mean_seed.end(), uniform_gen(0.1, 1.5));
+    thrust::generate(growth_rate_mean_seed.begin(), growth_rate_mean_seed.end(), uniform_gen(0.5, 1.5));
     state_type growth_rate_mean(dim);
     thrust::fill(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate_mean_seed[0]);
     host_type growth_rate_width_seed(1);
-    thrust::generate(growth_rate_width_seed.begin(), growth_rate_width_seed.end(), uniform_gen(0, growth_rate_mean_seed[0]));
+    thrust::generate(growth_rate_width_seed.begin(), growth_rate_width_seed.end(), uniform_gen(0, 0.1));
     state_type growth_rate_width(dim);
     thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_seed[0]);
     host_type unit_random_vec_host(dim);
@@ -330,19 +304,19 @@ int main( int arc, char* argv[] )
     // randomize interaction start
     dim = interaction_host.size();
     host_type compete_dense_host(1), promote_dense_host(1);
-    thrust::generate(compete_dense_host.begin(), compete_dense_host.end(), uniform_gen(0.5, 1.0));
+    thrust::generate(compete_dense_host.begin(), compete_dense_host.end(), uniform_gen(1.0, 1.0));
     state_type compete_dense = compete_dense_host;
     thrust::generate(promote_dense_host.begin(), promote_dense_host.end(), uniform_gen(0, 1 - compete_dense[0]));
     state_type promote_dense = promote_dense_host;
 
     host_type promote_mean_seed(1), promote_mean_host(dim), promote_width_seed(1), promote_width_host(dim), compete_mean_seed(1), compete_mean_host(dim), compete_width_seed(1), compete_width_host(dim);
-    thrust::generate(compete_mean_seed.begin(), compete_mean_seed.end(), uniform_gen(0.5, 2.0));
+    thrust::generate(compete_mean_seed.begin(), compete_mean_seed.end(), uniform_gen(1.0, 2.0));
     thrust::fill(compete_mean_host.begin(), compete_mean_host.end(), compete_mean_seed[0]);
     state_type compete_mean = compete_mean_host;
     thrust::generate(promote_mean_seed.begin(), promote_mean_seed.end(), uniform_gen(0.01, 1.0));
     thrust::fill(promote_mean_host.begin(), promote_mean_host.end(), promote_mean_seed[0]);
     state_type promote_mean = promote_mean_host;
-    thrust::generate(compete_width_seed.begin(), compete_width_seed.end(), uniform_gen(0, compete_mean_seed[0]));
+    thrust::generate(compete_width_seed.begin(), compete_width_seed.end(), uniform_gen(0, 0));
     thrust::fill(compete_width_host.begin(), compete_width_host.end(), compete_width_seed[0]);
     state_type compete_width = compete_width_host;
     thrust::generate(promote_width_seed.begin(), promote_width_seed.end(), uniform_gen(0, promote_mean_seed[0]));
@@ -394,46 +368,16 @@ int main( int arc, char* argv[] )
     state_type initial = initial_host;
     value_type initial_sum = thrust::reduce(initial.begin(), initial.end(), 0.0);
     thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
-    #pragma endregion
-    // TODO: use curand to generate random numbers on device w/ curand kernel
-    double_t *devResults, *hostResults;
-    hostResults = (double_t *)calloc(totalThreads * deviceCount, sizeof(double_t));
-    #pragma omp parallel for num_threads(4) private(devResults, devStates) shared(sampleSize, totalThreads, blockCount, threadPerBlock)
-    for (int dev=0; dev < deviceCount; ++dev) {
-        cudaSetDevice(dev);
-        cudaMalloc((void **)&devResults, totalThreads * sizeof(double_t));
-        cudaMemset(devResults, 0, totalThreads * sizeof(double_t));
-        cudaMalloc((void **)&devStates, totalThreads * sizeof(curandState));
-        setup_kernel<<<blockCount, threadPerBlock>>>(devStates, dev);
-        generate_uniform_kernel<<<blockCount, threadPerBlock>>>(devStates, devResults, sampleSize);
-        //CUDA_CALL(cudaMemcpy(hostResults + dev * totalThreads, devResults, totalThreads * sizeof(double_t), cudaMemcpyDeviceToHost));
-        cudaFree(devResults);
-    }
-    //for (i = 0; i < totalThreads * deviceCount ; ++i) {
-    //  printf("%1.15f ", hostResults[i]);
-    //}
-    free(hostResults);
+    // TODO: rewrite with curand
 
+
+    // TODO:: store the landscape/initial condition as arrow::Table and output as csv 
+    // a table with schema "growth_rate_mean" "growth_rate_width" "growth_rate" "promote_density" "promote_mean" "promote_width" "compete_density" "compete_mean" "compete_width" "interaction" "dilution" "sigma" 
+    
     typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
     
-    arrow::DoubleBuilder doublebuilder;
-    ARROW_RETURN_NOT_OK(doublebuilder.AppendValues( growth_rate, growth_rate.size() ));
-    std::shared_ptr<arrow::Array> growth_rate_arr;
-    ARROW_ASSIGN_OR_RAISE(growth_rate_arr, doublebuilder.Finish()); // n*o
-    ARROW_RETURN_NOT_OK(doublebuilder.AppendValues( Sigma, Sigma.size() ));  
-    std::shared_ptr<arrow::Array> Sigma_arr;
-    ARROW_ASSIGN_OR_RAISE(Sigma_arr, doublebuilder.Finish()); // n*o
-    ARROW_RETURN_NOT_OK(doublebuilder.AppendValues( interaction, interaction.size() ));
-    std::shared_ptr<arrow::Array> interaction_arr;
-    ARROW_ASSIGN_OR_RAISE(interaction_arr, doublebuilder.Finish()); // n*n*o
-
-
-
-    
-    
-    
-    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1.0, 0.01);
+    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1000.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
     

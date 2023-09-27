@@ -1,0 +1,76 @@
+10 species abundance
+--
+0
+10 species abundance
+--
+0.002
+10 species abundance
+--
+0.003
+10 species abundance
+--
+0.008
+10 species abundance
+--
+0.00888889
+10 species abundance
+--
+0.01
+10 species abundance
+--
+0.01
+10 species abundance
+--
+0.019
+10 species abundance
+--
+0.0235
+10 species abundance
+--
+0.046
+10 species abundance
+--
+0.05
+10 species abundance
+--
+0.055
+10 species abundance
+--
+0.055
+10 species abundance
+--
+0.0955
+10 species abundance
+--
+0.11575
+10 species abundance
+--
+0.217
+10 species abundance
+--
+0.235
+10 species abundance
+--
+0.2575
+10 species abundance
+--
+0.2575
+10 species abundance
+--
+0.2575
+10 species abundance
+--
+0.406
+10 species abundance
+--
+0.48025
+10 species abundance
+--
+0.8515
+10 species abundance
+--
+0.9175
+10 species abundance
+--
+1
+10 species abundance
