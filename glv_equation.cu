@@ -2,12 +2,9 @@
 #include <cstdlib>
 #include <vector>
 #include <cmath>
-#include <random>
 #include <iomanip>
-
 #include <boost/numeric/odeint.hpp>
 #include <boost/numeric/odeint/external/thrust/thrust.hpp>
-
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/reduce.h>
@@ -16,14 +13,12 @@
 #include <thrust/for_each.h>
 #include <thrust/generate.h>
 #include <thrust/reduce.h>
-
 #include <arrow/api.h>
 #include <arrow/csv/api.h>
 #include <arrow/io/api.h>
 #include <arrow/compute/api.h>
 #include <parquet/arrow/writer.h>
 #include <arrow/util/type_fwd.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
@@ -31,14 +26,13 @@
 #include <curand.h>
 #include <omp.h>
 
-using namespace boost::numeric::odeint;
+#pragma GCC diagnostic ignored "-Wunused-result"
 
+using namespace boost::numeric::odeint;
 
 typedef double_t value_type;
 typedef thrust::host_vector< value_type > host_type;
 typedef thrust::device_vector< value_type > state_type;
-
-#define CUDA_CALL(x) do { if((x) != cudaSuccess) { printf("Error at %s:%d\n", __FILE__,__LINE__); return EXIT_FAILURE; }} while(0)
 
 __global__ __launch_bound__(1024) void setup_kernel(curandState *state, int seed)
 {
@@ -138,7 +132,6 @@ struct generalized_lotka_volterra_system
         }
     };
 
-
     void operator()( state_type& y , state_type& dydt, value_type t)
     {
         // copy y n times to make it n^2*io
@@ -168,8 +161,6 @@ struct generalized_lotka_volterra_system
         pos_sum = pos_sum_host;
         neg_sum = neg_sum_host;
 
-
-
         thrust::for_each(
                 thrust::make_zip_iterator( thrust::make_tuple( y.begin(), dydt.begin(), growth_rate_i.begin(), Sigma_i.begin(), dilution_ni.begin(), pos_sum.begin(), neg_sum.begin() ) ),
                 thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.end(), pos_sum.end(), neg_sum.end() ) ),
@@ -187,22 +178,7 @@ struct generalized_lotka_volterra_system
 
 };
 
-// generator for random variable of uniform distribution U(a, b)
-struct uniform_gen
-{
-    uniform_gen(value_type a, value_type b): m_a(a), m_b(b) {}
-    
-    __host__
-    value_type operator()() {
-        pcg64 rng(pcg_extras::seed_seq_from<std::random_device>{});
-        // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
-        std::uniform_real_distribution<double_t> uniform_dist(m_a, m_b);
-        return uniform_dist(rng);
-    }
-
-    value_type m_a, m_b;
-};
-
+#pragma region
 struct index_transform
 {
     index_transform(size_t num_species): m_num_species(num_species) {
@@ -236,8 +212,6 @@ struct set_minus_one
     }
 };
 
-
-
 struct normalize
 {
     normalize(value_type normalized_by): m_normalized_by(normalized_by) {}
@@ -258,6 +232,27 @@ struct is_diagonal
         return thrust::get<0>(t);
     }
 };
+#pragma endregion
+
+arrow::Status initial_condition_csv(double_t *growth_rate, double_t *Sigma, double_t *interaction, double_t *dilution , int64_t size) {
+  arrow::DoubleBuilder doublebuilder;
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(in, size));
+  std::shared_ptr<arrow::Array> random_number;
+  ARROW_ASSIGN_OR_RAISE(random_number, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> random_number_chunks = std::make_shared<arrow::ChunkedArray>(random_number);
+  std::shared_ptr<arrow::Field> field_random_number;
+  std::shared_ptr<arrow::Schema> schema;
+  field_random_number = arrow::field("random_number", arrow::float64());
+  schema = arrow::schema({field_random_number});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {random_number_chunks});
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_out.csv"));
+  ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
+  ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
+  ARROW_RETURN_NOT_OK(csv_writer->Close());
+
+  return arrow::Status::OK();
+}
 
 const size_t num_species = 3; //10
 // initalize parameters, set the number of species to 10 in the generalized lv equation
@@ -269,7 +264,7 @@ const size_t innerloop = 200; //500
 // precision
 
 const unsigned int threadPerBlock = 1024;
-const unsigned int blockCount = 207520;
+const unsigned int blockCount = 207520; //the multiply is just larger than 8.5 * 10**8
 const unsigned int totalThreads = threadPerblock * blockCount;
 
 int main( int arc, char* argv[] ) 
@@ -361,23 +356,7 @@ int main( int arc, char* argv[] )
 
     typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
-    
-    arrow::DoubleBuilder doublebuilder;
-    ARROW_RETURN_NOT_OK(doublebuilder.AppendValues( growth_rate, growth_rate.size() ));
-    std::shared_ptr<arrow::Array> growth_rate_arr;
-    ARROW_ASSIGN_OR_RAISE(growth_rate_arr, doublebuilder.Finish()); // n*o
-    ARROW_RETURN_NOT_OK(doublebuilder.AppendValues( Sigma, Sigma.size() ));  
-    std::shared_ptr<arrow::Array> Sigma_arr;
-    ARROW_ASSIGN_OR_RAISE(Sigma_arr, doublebuilder.Finish()); // n*o
-    ARROW_RETURN_NOT_OK(doublebuilder.AppendValues( interaction, interaction.size() ));
-    std::shared_ptr<arrow::Array> interaction_arr;
-    ARROW_ASSIGN_OR_RAISE(interaction_arr, doublebuilder.Finish()); // n*n*o
 
-
-
-    
-    
-    
     integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
