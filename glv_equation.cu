@@ -2,12 +2,9 @@
 #include <cstdlib>
 #include <vector>
 #include <cmath>
-#include <random>
 #include <iomanip>
-
 #include <boost/numeric/odeint.hpp>
 #include <boost/numeric/odeint/external/thrust/thrust.hpp>
-
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/reduce.h>
@@ -16,20 +13,84 @@
 #include <thrust/for_each.h>
 #include <thrust/generate.h>
 #include <thrust/reduce.h>
+#include <arrow/api.h>
+#include <arrow/csv/api.h>
+#include <arrow/io/api.h>
+#include <arrow/compute/api.h>
+#include <parquet/arrow/writer.h>
+#include <arrow/util/type_fwd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <cuda_runtime.h>
+#include <curand_kernel.h>
+#include <curand.h>
+#include <omp.h>
 
-// #include <arrow/api.h>
-// #include <arrow/csv/api.h>
-// #include <arrow/io/api.h>
-
-
-#include "pcg-cpp-0.98/include/pcg_random.hpp"
-//using pcg c++ implementation, pcg64, compilation requires -std=c++11 flag
+#pragma GCC diagnostic ignored "-Wunused-result"
 
 using namespace boost::numeric::odeint;
 
-typedef double value_type;
+typedef double_t value_type;
 typedef thrust::host_vector< value_type > host_type;
 typedef thrust::device_vector< value_type > state_type;
+
+__global__ __launch_bound__(1024) void setup_kernel(curandState *state, int seed)
+{
+  int id = threadIdx.x + blockIdx.x * blockDim.x;
+  /* Each thread gets device index seed, a different sequence number, no offset */
+  curand_init(seed, id, 0, &state[id]);
+}
+
+__global__ __launch_bound__(1024) void initialize_parameters_growth_sigma(curandState *state, double_t *growth_rate, double_t *sigma, int sampleSize)
+{
+  int id = threadIdx.x + blockIdx.x * blockDim.x;
+  curandState localState = state[id];
+// no dim 10**6
+  if (id < sampleSize) {
+    double_t growth_mean = 0.1 + 1.4 * curand_uniform_double(&localState);
+    double_t growth_width = growth_mean * curand_uniform_double(&localstate);
+    growth_rate[id] = growth_mean - growth_width + 2 * growth_width * curand_uniform_double(&localState);
+    sigma[id] = 0.5 * curand_uniform_double(&localState);
+  }
+}
+
+__global__ __launch_bound__(1024) void initialize_parameters_interaction(curandState *state, double_t *interaction, int sampleSize)
+{
+    int id = threadIdx.x + blockIdx.x * blockDim.x;
+    curandState localState = state[id];
+    if (id < sampleSize) {
+        // n2o dim 10**8
+        double_t compete_mean = 0.5 + 1.5 * curand_uniform_double(&localState);
+        double_t compete_dense = 0.5 + 0.5 * curand_uniform_double(&localState);
+        double_t promote_mean = 0.01 + 0.99 * curand_uniform_double(&localState);
+        double_t promote_dense = ( 1 -  compete_dense ) * curand_uniform_double(&localState);
+        double_t compete_width = compete_mean * curand_uniform_double(&localState);
+        double_t promote_width = promote_mean * curand_uniform_double(&localState);
+        (curand_uniform(&localState) <= promote_dense) ? 
+            interaction[id] = promote_mean - promote_width + 2 * promote_width * curand_uniform_double(&localState) : (curand_uniform(&localState) >= compete_dense) ? 
+            interaction[id] = -1 * (compete_mean - compete_width + 2 * compete_width * curand_uniform_double(&localState)) : 0 ;
+    }
+}
+
+__global__ __launch_bound__(1024) void initialize_parameters_dilution(curandState *state, double_t *dilution, int sampleSize)
+{
+    int id = threadIdx.x + blockIdx.x * blockDim.x;
+    curandState localState = state[id];
+    if (id < sampleSize) {
+        // i dim 10**3
+        dilution[id] = std::min(growth_mean * curand_uniform_double(&localState), 0.3 * curand_uniform_double(&localState));
+    }
+}
+
+__global__ __launch_bound__(1024) void initialize_initial(curandState *state, double_t *initial, int sampleSize)
+{
+    int id = threadIdx.x + blockIdx.x * blockDim.x;
+    curandState localState = state[id];
+    if (id < sampleSize) {
+        // noi dim 10**9
+        initial[id] = curand_uniform_double(&localState);
+    }
+}
 
 struct generalized_lotka_volterra_system
 {
@@ -70,18 +131,6 @@ struct generalized_lotka_volterra_system
             thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + thrust::get<6>(t) + thrust::get<3>(t) * thrust::get<5>(t) / ( 1 + thrust::get<5>(t) )) - thrust::get<4>(t) * thrust::get<0>(t);
         }
     };
-/*  
-    std::pair<value_type, value_type> find_sum( host_type vector, size_t start_index ) {
-        value_type pos_sum = 0.0;
-        value_type neg_sum = 0.0;
-        for (int i=0; i < m_num_species; ++i) {
-            value_type vector_value = vector[ start_index + i ];
-            vector_value > 0 ? pos_sum += vector_value : neg_sum += vector_value;
-        }
-        return std::make_pair(pos_sum, neg_sum);
-    } 
-    */
-
 
     void operator()( state_type& y , state_type& dydt, value_type t)
     {
@@ -117,82 +166,19 @@ struct generalized_lotka_volterra_system
                 thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.end(), pos_sum.end(), neg_sum.end() ) ),
                 generalized_lotka_volterra_functor()
         );
+
         std::clog << "10 species abundance" << "\n";
         for (int i=0; i<y.size(); ++i) {
             std::clog << y[i] << std::endl;
+            // store y
         }
+        // write to arrow object once only
         std::clog << t << "\n";
     }
 
 };
 
-// generator for random variable of uniform distribution U(a, b)
-struct uniform_gen
-{
-    uniform_gen(value_type a, value_type b): m_a(a), m_b(b) {}
-    
-    __host__
-    value_type operator()() {
-        pcg64 rng(pcg_extras::seed_seq_from<std::random_device>{});
-        // make a random number engine, use the 64-bit generator, 2^128 period, 2^127 streams
-        std::uniform_real_distribution<double_t> uniform_dist(m_a, m_b);
-        return uniform_dist(rng);
-    }
-
-    value_type m_a, m_b;
-};
-
-struct set_growthrate
-{ 
-    template<class T >
-    __host__ __device__
-    void operator()( T& t ) {
-        thrust::get<3>(t) = thrust::get<0>(t) - thrust::get<1>(t) + 2 * thrust::get<1>(t) * thrust::get<2>(t); // t = { growth_rate_mean, growth_rate_width, unit_random_vec, growth_rate}
-    }
-};
-
-struct is_below_promote_density
-{   
-    template<class T >
-    __host__ __device__
-    bool operator()( T t ) /* t = { 0 threshold_vector, 1 promote_dense, 2 compete_dense, 3 promote_mean, 4 promote_width, 5 compete_mean, 6 compete_width, 7 unit_random_vec, 8 interaction } (arity = 9)*/
-    {
-        return thrust::get<0>(t) <= thrust::get<1>(t);
-    }
-};
-
-struct is_above_compete_density
-{
-    template<class T >
-    __host__ __device__
-    bool operator()( T t )
-    {
-        return thrust::get<0>(t) >= thrust::get<2>(t);
-    }
-};
-
-struct set_promote_value
-{
-    template<class T >
-    __host__ __device__
-    T operator()( T t )
-    {
-        thrust::get<8>(t) = thrust::get<3>(t) - thrust::get<4>(t) + 2 * thrust::get<4>(t) * thrust::get<7>(t);
-        return t;
-    }
-};
-
-struct set_compete_value
-{
-    template<class T >
-    __host__ __device__
-    T operator()( T t )
-    {
-        thrust::get<8>(t) = -1 * (thrust::get<5>(t) - thrust::get<6>(t) + 2 * thrust::get<6>(t) * thrust::get<7>(t));
-        return t;
-    }
-};
-
+#pragma region
 struct index_transform
 {
     index_transform(size_t num_species): m_num_species(num_species) {
@@ -226,21 +212,6 @@ struct set_minus_one
     }
 };
 
-struct set_dilution
-{
-    set_dilution(value_type growth_rate_mean): m_growth_rate_mean(growth_rate_mean) {}
-
-    __host__
-    void operator()(value_type& di) {
-        host_type random_vec_a(1), random_vec_b(1);
-        thrust::generate(random_vec_a.begin(), random_vec_a.end(), uniform_gen(0, m_growth_rate_mean));
-        thrust::generate(random_vec_b.begin(), random_vec_b.end(), uniform_gen(0, 0.3));
-        di = random_vec_a[0] < random_vec_b[0] ? random_vec_a[0] : random_vec_b[0];
-    }
-
-    value_type m_growth_rate_mean;
-};
-
 struct normalize
 {
     normalize(value_type normalized_by): m_normalized_by(normalized_by) {}
@@ -261,89 +232,85 @@ struct is_diagonal
         return thrust::get<0>(t);
     }
 };
+#pragma endregion
 
-const size_t num_species = 10; //10
+arrow::Status initial_condition_csv(double_t *growth_rate, double_t *Sigma, double_t *interaction, double_t *dilution , int64_t size) {
+  arrow::DoubleBuilder doublebuilder;
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(in, size));
+  std::shared_ptr<arrow::Array> random_number;
+  ARROW_ASSIGN_OR_RAISE(random_number, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> random_number_chunks = std::make_shared<arrow::ChunkedArray>(random_number);
+  std::shared_ptr<arrow::Field> field_random_number;
+  std::shared_ptr<arrow::Schema> schema;
+  field_random_number = arrow::field("random_number", arrow::float64());
+  schema = arrow::schema({field_random_number});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {random_number_chunks});
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_out.csv"));
+  ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
+  ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
+  ARROW_RETURN_NOT_OK(csv_writer->Close());
+
+  return arrow::Status::OK();
+}
+
+const size_t num_species = 3; //10
 // initalize parameters, set the number of species to 10 in the generalized lv equation
 
-const size_t outerloop = 1; //200  
+const size_t outerloop = 1000; //200  
 // samplesize
 
-const size_t innerloop = 1; //500
+const size_t innerloop = 200; //500
 // precision
+
+const unsigned int threadPerBlock = 1024;
+const unsigned int blockCount = 207520; //the multiply is just larger than 8.5 * 10**8
+const unsigned int totalThreads = threadPerblock * blockCount;
 
 int main( int arc, char* argv[] ) 
 {
-    int driver_version, runtime_version;
-    cudaDriverGetVersion(&driver_version);
-    cudaRuntimeGetVersion(&runtime_version);
-    std::cout << "driver version " << driver_version << "\t" << "runtime version " << runtime_version << std::endl;
+    int deviceCount;
+    cudaGetDeviceCount(&deviceCount);
 
-    host_type growth_rate_host(num_species * outerloop)/* copy innerloop times */, Sigma_host(num_species * outerloop)/* copy innerloop times */, dilution_host(1 * outerloop) /* copy num_species*innerloop times */, interaction_host(num_species * num_species * outerloop) /* copy innerloop times */, initial_host(num_species * outerloop * innerloop);
+    int sampleSize = num_species * outerloop;
+    curandState *devStates;
+    double_t *devResults, *hostResults, *devResults2, *hostResults2;
+    hostResults = (double_t *)calloc(sampleSize * deviceCount, sizeof(double_t));
+    #pragma omp parallel for num_threads(4) private(devResults, devResults2, devStates) shared(sampleSize, totalThreads, blockCount, threadPerBlock)
+    for (int dev=0; dev < deviceCount; ++dev) {
+        cudaSetDevice(dev);
+        cudaMalloc((void **)&devResults, sampleSize * sizeof(double_t));
+        cudaMalloc((void **)&devResults2, sampleSize * sizeof(double_t));
+        cudaMemset(devResults, 0, sampleSize * sizeof(double_t));
+        cudaMemset(devResults2, 0, sampleSize * sizeof(double_t));
+        cudaMalloc((void **)&devStates, totalThreads * sizeof(curandState));
+        setup_kernel<<<blockCount, threadPerBlock>>>(devStates, dev);
+        initialize_parameters_growth_sigma<<<blockCount, threadPerBlock>>>(devStates, devResults, devResults2, sampleSize);
+        cudaMemcpy(hostResults + dev * sampleSize, devResults, sampleSize * sizeof(double_t), cudaMemcpyDeviceToHost);
+        cudaMemcpy(hostResults2 + dev * sampleSize, devResults2, sampleSize * sizeof(double_t), cudaMemcpyDeviceToHost);
+        cudaFree(devResults);
+        cudaFree(devResults2);
+    }
+    state_type growth_rate(hostResults, hostResults +  sampleSize * deviceCount);
+    state_type Sigma(hostResults2, hostResults2 + sampleSize * deviceCount);
+    free(hostResults);
+    free(hostResults2);
 
-    // randomize growth rate start
-    size_t dim = growth_rate_host.size();
-    host_type growth_rate_mean_seed(1);
-    thrust::generate(growth_rate_mean_seed.begin(), growth_rate_mean_seed.end(), uniform_gen(0.5, 1.5));
-    state_type growth_rate_mean(dim);
-    thrust::fill(growth_rate_mean.begin(), growth_rate_mean.end(), growth_rate_mean_seed[0]);
-    host_type growth_rate_width_seed(1);
-    thrust::generate(growth_rate_width_seed.begin(), growth_rate_width_seed.end(), uniform_gen(0, 0.1));
-    state_type growth_rate_width(dim);
-    thrust::fill(growth_rate_width.begin(), growth_rate_width.end(), growth_rate_width_seed[0]);
-    host_type unit_random_vec_host(dim);
-    thrust::generate(unit_random_vec_host.begin(), unit_random_vec_host.end(), uniform_gen(0, 1.0));
-    state_type unit_random_vec = unit_random_vec_host;
-    state_type growth_rate = growth_rate_host;
-    thrust::for_each( 
-        thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.begin(), growth_rate_width.begin(), unit_random_vec.begin(), growth_rate.begin() )),
-        thrust::make_zip_iterator( thrust::make_tuple( growth_rate_mean.end(), growth_rate_width.end(), unit_random_vec.end(), growth_rate.end() )),
-        set_growthrate() 
-    );
-    // randomize growth rate end
-
-    // randomize interaction start
-    dim = interaction_host.size();
-    host_type compete_dense_host(1), promote_dense_host(1);
-    thrust::generate(compete_dense_host.begin(), compete_dense_host.end(), uniform_gen(1.0, 1.0));
-    state_type compete_dense = compete_dense_host;
-    thrust::generate(promote_dense_host.begin(), promote_dense_host.end(), uniform_gen(0, 1 - compete_dense[0]));
-    state_type promote_dense = promote_dense_host;
-
-    host_type promote_mean_seed(1), promote_mean_host(dim), promote_width_seed(1), promote_width_host(dim), compete_mean_seed(1), compete_mean_host(dim), compete_width_seed(1), compete_width_host(dim);
-    thrust::generate(compete_mean_seed.begin(), compete_mean_seed.end(), uniform_gen(1.0, 2.0));
-    thrust::fill(compete_mean_host.begin(), compete_mean_host.end(), compete_mean_seed[0]);
-    state_type compete_mean = compete_mean_host;
-    thrust::generate(promote_mean_seed.begin(), promote_mean_seed.end(), uniform_gen(0.01, 1.0));
-    thrust::fill(promote_mean_host.begin(), promote_mean_host.end(), promote_mean_seed[0]);
-    state_type promote_mean = promote_mean_host;
-    thrust::generate(compete_width_seed.begin(), compete_width_seed.end(), uniform_gen(0, 0));
-    thrust::fill(compete_width_host.begin(), compete_width_host.end(), compete_width_seed[0]);
-    state_type compete_width = compete_width_host;
-    thrust::generate(promote_width_seed.begin(), promote_width_seed.end(), uniform_gen(0, promote_mean_seed[0]));
-    thrust::fill(promote_width_host.begin(), promote_width_host.end(), promote_width_seed[0]);
-    state_type promote_width = promote_width_host;
-
-    host_type threshold_vector_host(dim);
-    thrust::generate(threshold_vector_host.begin(), threshold_vector_host.end(), uniform_gen(0, 1.0));
-    state_type threshold_vector = threshold_vector_host;
-    thrust::generate(unit_random_vec_host.begin(), unit_random_vec_host.end(), uniform_gen(0, 1.0));
-    unit_random_vec = unit_random_vec_host;
-
-    state_type interaction = interaction_host;
-    thrust::transform_if( 
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(), compete_mean.end(), compete_width.end(), unit_random_vec.end(), interaction.end() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
-        set_promote_value(),
-        is_below_promote_density() 
-    );
-    thrust::transform_if( 
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.end(), promote_dense.end(), compete_dense.end(), promote_mean.end(), promote_width.end(), compete_mean.end(), compete_width.end(), unit_random_vec.end(), interaction.end() )),
-        thrust::make_zip_iterator( thrust::make_tuple( threshold_vector.begin(), promote_dense.begin(), compete_dense.begin(), promote_mean.begin(), promote_width.begin(), compete_mean.begin(), compete_width.begin(), unit_random_vec.begin(), interaction.begin() )),
-        set_compete_value(),
-        is_above_compete_density()
-    );
+    sampleSize = num_species * num_species * outerloop;
+    hostResults = (double_t *)calloc(sampleSize * deviceCount, sizeof(double_t));
+    #pragma omp parallel for num_threads(4) private(devResults, devStates) shared(sampleSize, totalThreads, blockCount, threadPerBlock)
+    for (int dev=0; dev < deviceCount; ++dev) {
+        cudaSetDevice(dev);
+        cudaMalloc((void **)&devResults, sampleSize * sizeof(double_t));
+        cudaMemset(devResults, 0, sampleSize * sizeof(double_t));
+        // cudaMalloc((void **)&devStates, totalThreads * sizeof(curandState));
+        // setup_kernel<<<blockCount, threadPerBlock>>>(devStates, dev);
+        initialize_parameters_interaction<<<blockCount, threadPerBlock>>>(devStates, devResults, sampleSize);
+        cudaMemcpy(hostResults + dev * sampleSize, devResults, sampleSize * sizeof(double_t), cudaMemcpyDeviceToHost);
+        cudaFree(devResults);
+    }
+    state_type interaction(hostResults, hostResults +  sampleSize * deviceCount);
+    free(hostResults);
     thrust::host_vector<size_t> index_host(dim);
     thrust::sequence(index_host.begin(), index_host.end(), 1);
     thrust::for_each(index_host.begin(), index_host.end(), index_transform(num_species));
@@ -355,29 +322,42 @@ int main( int arc, char* argv[] )
         set_minus_one(),
         is_diagonal() 
     );
-    // randomize interaction end
-
-    // randomize Sigma
-    thrust::generate(Sigma_host.begin(), Sigma_host.end(), uniform_gen(0, 0.5));
-    state_type Sigma = Sigma_host;
-    // randomize dilution
-    thrust::for_each(dilution_host.begin(), dilution_host.end(), set_dilution(growth_rate_mean_seed[0]));
-    state_type dilution = dilution_host;
-    // randomize initial
-    thrust::generate(initial_host.begin(), initial_host.end(), uniform_gen(0, 1.0));
-    state_type initial = initial_host;
-    value_type initial_sum = thrust::reduce(initial.begin(), initial.end(), 0.0);
-    thrust::for_each(initial.begin(), initial.end(), normalize(initial_sum));
-    // TODO: rewrite with curand
-
-
-    // TODO:: store the landscape/initial condition as arrow::Table and output as csv 
-    // a table with schema "growth_rate_mean" "growth_rate_width" "growth_rate" "promote_density" "promote_mean" "promote_width" "compete_density" "compete_mean" "compete_width" "interaction" "dilution" "sigma" 
     
+    sampleSize = innerloop;
+    hostResults = (double_t *)calloc(sampleSize * deviceCount, sizeof(double_t));
+    #pragma omp parallel for num_threads(4) private(devResults, devStates) shared(sampleSize, totalThreads, blockCount, threadPerBlock)
+    for (int dev=0; dev < deviceCount; ++dev) {
+        cudaSetDevice(dev);
+        cudaMalloc((void **)&devResults, sampleSize * sizeof(double_t));
+        cudaMemset(devResults, 0, sampleSize * sizeof(double_t));
+        intialize_parameters_dilution<<<blockCount, threadPerBlock>>>(devStates, devResults, sampleSize);
+        cudaMemcpy(hostResults + dev * sampleSize, devResults, sampleSize * sizeof(double_t), cudaMemcpyDeviceToHost);
+        cudaFree(devResults);
+    }
+    state_type dilution(hostResults, hostResults +  sampleSize * deviceCount);
+    free(hostResults);
+    
+    sampleSize = num_species * innerloop * outerloop;
+    hostResults = (double_t *)calloc(sampleSize * deviceCount, sizeof(double_t));
+    #pragma omp parallel for num_threads(4) private(devResults, devStates) shared(sampleSize, totalThreads, blockCount, threadPerBlock)
+    for (int dev=0; dev < deviceCount; ++dev) {
+        cudaSetDevice(dev);
+        cudaMalloc((void **)&devResults, sampleSize * sizeof(double_t));
+        cudaMemset(devResults, 0, sampleSize * sizeof(double_t));
+        initialize_initial<<<blockCount, threadPerBlock>>>(devStates, devResults, sampleSize);
+        cudaMemcpy(hostResults + dev * sampleSize, devResults, sampleSize * sizeof(double_t), cudaMemcpyDeviceToHost);
+        cudaFree(devResults);
+    }
+    state_type initial(hostResults, hostResults +  sampleSize * deviceCount);
+    for (int i = 0; i < innerloop * outerloop; ++i ) {
+        double_t sum = thrust::reduce(initial.begin() + i * num_species, initial.begin() + (i + 1) * num_species, 0);
+        thrust::for_each(initial.begin() + i * num_species, initial.begin() + (i + 1) * num_species, normalize(sum));
+    }
+
     typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
     generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate, Sigma, interaction, dilution );
-    
-    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1000.0, 0.01);
+
+    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial , 0.0, 1.0, 0.01);
 
     // TODO: parse results with Euclidean distance aka 2-norm
     
