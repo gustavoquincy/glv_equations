@@ -163,6 +163,7 @@ struct generalized_lotka_volterra_system
                 generalized_lotka_volterra_functor()
         );
 
+        // one time  point
         for (int i=0; i<y.size(); ++i) {
             std::clog << y[i] << std::endl;
             // y noi-dim
@@ -172,6 +173,28 @@ struct generalized_lotka_volterra_system
     }
 
 };
+
+arrow::Status write_time
+
+arrow::Status initial_condition_csv(double_t *growth_rate, double_t *Sigma, double_t *interaction, double_t *dilution , int64_t size) {
+  arrow::DoubleBuilder doublebuilder;
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(in, size));
+  std::shared_ptr<arrow::Array> random_number;
+  ARROW_ASSIGN_OR_RAISE(random_number, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> random_number_chunks = std::make_shared<arrow::ChunkedArray>(random_number);
+  std::shared_ptr<arrow::Field> field_random_number;
+  std::shared_ptr<arrow::Schema> schema;
+  field_random_number = arrow::field("random_number", arrow::float64());
+  schema = arrow::schema({field_random_number});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {random_number_chunks});
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_out.csv"));
+  ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
+  ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
+  ARROW_RETURN_NOT_OK(csv_writer->Close());
+
+  return arrow::Status::OK();
+}
 
 #pragma region //functor for thrust vector interaction and initial
 struct index_transform
@@ -229,25 +252,6 @@ struct is_diagonal
 };
 #pragma endregion
 
-arrow::Status initial_condition_csv(double_t *growth_rate, double_t *Sigma, double_t *interaction, double_t *dilution , int64_t size) {
-  arrow::DoubleBuilder doublebuilder;
-  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(in, size));
-  std::shared_ptr<arrow::Array> random_number;
-  ARROW_ASSIGN_OR_RAISE(random_number, doublebuilder.Finish());
-  std::shared_ptr<arrow::ChunkedArray> random_number_chunks = std::make_shared<arrow::ChunkedArray>(random_number);
-  std::shared_ptr<arrow::Field> field_random_number;
-  std::shared_ptr<arrow::Schema> schema;
-  field_random_number = arrow::field("random_number", arrow::float64());
-  schema = arrow::schema({field_random_number});
-  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {random_number_chunks});
-  std::shared_ptr<arrow::io::FileOutputStream> outfile;
-  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_out.csv"));
-  ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
-  ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
-  ARROW_RETURN_NOT_OK(csv_writer->Close());
-
-  return arrow::Status::OK();
-}
 
 const size_t num_species = 3; //10
 
