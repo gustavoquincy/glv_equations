@@ -13,9 +13,11 @@
 #include <thrust/for_each.h>
 #include <thrust/generate.h>
 #include <thrust/reduce.h>
+#include <thrust/sequence.h>
 #include <arrow/api.h>
 #include <arrow/csv/api.h>
 #include <arrow/io/api.h>
+#include <arrow/ipc/api.h>
 #include <arrow/compute/api.h>
 #include <parquet/arrow/writer.h>
 #include <arrow/util/type_fwd.h>
@@ -36,20 +38,19 @@ typedef thrust::device_vector< value_type > state_type;
 
 #pragma region //curand kernels
 
-__global__ __launch_bound__(1024) void initialize_parameters_growth_sigma(curandState *state, double_t *growth_rate, double_t *sigma, int sampleSize, int dev, int offset)
+__global__ __launch_bounds__(1024) void initialize_parameters_growth_sigma(curandState *state, double_t *growth_rate, double_t *sigma, int sampleSize, int dev, int offset, double_t growth_mean)
 {
   int id = threadIdx.x + blockIdx.x * blockDim.x;
   curand_init(dev, id, offset, &state[id]);
 // no dim 10**6
   if (id < sampleSize) {
-    double_t growth_mean = 0.1 + 1.4 * curand_uniform_double(&state[id]);
     double_t growth_width = growth_mean * curand_uniform_double(&state[id]);
     growth_rate[id] = growth_mean - growth_width + 2 * growth_width * curand_uniform_double(&state[id]);
     sigma[id] = 0.5 * curand_uniform_double(&state[id]);
   }
 }
 
-__global__ __launch_bound__(1024) void initialize_parameters_interaction(curandState *state, double_t *interaction, int sampleSize, int dev, int offset)
+__global__ __launch_bounds__(1024) void initialize_parameters_interaction(curandState *state, double_t *interaction, int sampleSize, int dev, int offset)
 {
     int id = threadIdx.x + blockIdx.x * blockDim.x;
     curand_init(dev, id, offset, &state[id]);
@@ -67,7 +68,7 @@ __global__ __launch_bound__(1024) void initialize_parameters_interaction(curandS
     }
 }
 
-__global__ __launch_bound__(1024) void initialize_parameters_dilution(curandState *state, double_t *dilution, int sampleSize, int dev, int offset)
+__global__ __launch_bounds__(1024) void initialize_parameters_dilution(curandState *state, double_t *dilution, int sampleSize, int dev, int offset, double_t growth_mean)
 {
     int id = threadIdx.x + blockIdx.x * blockDim.x;
     curand_init(dev, id, offset, &state[id]);
@@ -77,7 +78,7 @@ __global__ __launch_bound__(1024) void initialize_parameters_dilution(curandStat
     }
 }
 
-__global__ __launch_bound__(1024) void initialize_initial(curandState *state, double_t *initial, int sampleSize, int dev, int offset)
+__global__ __launch_bounds__(1024) void initialize_initial(curandState *state, double_t *initial, int sampleSize, int dev, int offset)
 {
     int id = threadIdx.x + blockIdx.x * blockDim.x;
     curand_init(dev, id, offset, &state[id]);
@@ -87,6 +88,35 @@ __global__ __launch_bound__(1024) void initialize_initial(curandState *state, do
     }
 }
 #pragma endregion
+
+arrow::Status state_write_table(double_t *state, int n, int o, int i, double_t time) {
+    arrow::DoubleBuilder doublebuilder;
+    ARROW_RETURN_NOT_OK(doublebuilder.AppendNulls(n * i)); // ni, the column length of the table
+    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Array> arr_null, doublebuilder.Finish());
+    std::shared_ptr<arrow::Table> state_table = arrow::Table::Make(arrow::schema({arrow::field("", arrow::float64())}), {arr_null});
+    for (int j = 0; j < o; ++j){
+        for (int k = 0; k < i; ++k) {
+            double_t *p_start = state + n * j + n * o * k;
+            double_t *p_end = state + n * j + n * o * k + n;
+            for (double_t *ptr = p_start; ptr < p_end; ++ptr) {
+                ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(ptr, 1));
+            }
+        }
+        ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Array> sys_timesnap, doublebuilder.Finish());
+        std::shared_ptr<arrow::ChunkedArray> sys_timesnap_chunks = std::make_shared<arrow::ChunkedArray>(sys_timesnap);
+        std::string str = "system_" + std::to_string(j);
+        std::shared_ptr<arrow::Field> field = arrow::field(str, arrow::float64());
+        ARROW_ASSIGN_OR_RAISE(state_table, state_table->AddColumn(1, field, sys_timesnap_chunks));
+    } 
+    ARROW_ASSIGN_OR_RAISE(state_table, state_table->RemoveColumn(0)); // remove the null column, aka the first column
+    std::shared_ptr<arrow::io::FileOutputStream> outfile;
+    std::string str = "system_state_at_time_" + std::to_string(time) + ".csv";
+    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(str));
+    ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, state_table->schema()));
+    ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*state_table));
+    ARROW_RETURN_NOT_OK(csv_writer->Close());
+    return arrow::Status::OK();
+}
 
 struct generalized_lotka_volterra_system
 {
@@ -163,39 +193,94 @@ struct generalized_lotka_volterra_system
                 generalized_lotka_volterra_functor()
         );
 
-        // one time  point
-        for (int i=0; i<y.size(); ++i) {
-            std::clog << y[i] << std::endl;
-            // y noi-dim
+        double_t *raw_y = thrust::raw_pointer_cast(y.data());
+        arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop, t);
+        if (!status.ok()) {
+            std::clog << status.ToString() << std::endl;
         }
-        // write to arrow object once only
-        std::clog << t << "\n";
     }
 
 };
 
-arrow::Status write_time
-
-arrow::Status initial_condition_csv(double_t *growth_rate, double_t *Sigma, double_t *interaction, double_t *dilution , int64_t size) {
+arrow::Status growth_rate_sigma_write_table(double_t *growth_rate, double_t *Sigma, int64_t size) {
   arrow::DoubleBuilder doublebuilder;
-  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(in, size));
-  std::shared_ptr<arrow::Array> random_number;
-  ARROW_ASSIGN_OR_RAISE(random_number, doublebuilder.Finish());
-  std::shared_ptr<arrow::ChunkedArray> random_number_chunks = std::make_shared<arrow::ChunkedArray>(random_number);
-  std::shared_ptr<arrow::Field> field_random_number;
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(growth_rate, size));
+  std::shared_ptr<arrow::Array> growth_rate_arr;
+  ARROW_ASSIGN_OR_RAISE(growth_rate_arr, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> growth_rate_chunks = std::make_shared<arrow::ChunkedArray>(growth_rate_arr);
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(Sigma, size));
+  std::shared_ptr<arrow::Array> sigma_arr;
+  ARROW_ASSIGN_OR_RAISE(sigma_arr, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> sigma_chunks = std::make_shared<arrow::ChunkedArray>(sigma_arr);
+  std::shared_ptr<arrow::Field> field_growth_rate, field_sigma;
   std::shared_ptr<arrow::Schema> schema;
-  field_random_number = arrow::field("random_number", arrow::float64());
-  schema = arrow::schema({field_random_number});
-  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {random_number_chunks});
+  field_growth_rate = arrow::field("growth rate", arrow::float64());
+  field_sigma = arrow::field("sigma", arrow::float64());
+  schema = arrow::schema({field_growth_rate, field_sigma});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {growth_rate_chunks, sigma_chunks});
   std::shared_ptr<arrow::io::FileOutputStream> outfile;
-  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_out.csv"));
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("growth_rate_and_sigma.csv"));
   ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
   ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
   ARROW_RETURN_NOT_OK(csv_writer->Close());
-
   return arrow::Status::OK();
 }
 
+arrow::Status interaction_write_table(double_t *interaction, int64_t size) {
+  arrow::DoubleBuilder doublebuilder;
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(interaction, size));
+  std::shared_ptr<arrow::Array> interaction_arr;
+  ARROW_ASSIGN_OR_RAISE(interaction_arr, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> interaction_chunks = std::make_shared<arrow::ChunkedArray>(interaction_arr);
+  std::shared_ptr<arrow::Field> field_interaction;
+  std::shared_ptr<arrow::Schema> schema;
+  field_interaction = arrow::field("interaction matrix", arrow::float64());
+  schema = arrow::schema({field_interaction});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {interaction_chunks});
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("interaction.csv"));
+  ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
+  ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
+  ARROW_RETURN_NOT_OK(csv_writer->Close());
+  return arrow::Status::OK();
+}
+
+arrow::Status dilution_write_table(double_t *dilution, int64_t size) {
+  arrow::DoubleBuilder doublebuilder;
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(dilution, size));
+  std::shared_ptr<arrow::Array> dilution_arr;
+  ARROW_ASSIGN_OR_RAISE(dilution_arr, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> dilution_chunks = std::make_shared<arrow::ChunkedArray>(dilution_arr);
+  std::shared_ptr<arrow::Field> field_dilution;
+  std::shared_ptr<arrow::Schema> schema;
+  field_dilution = arrow::field("dilution", arrow::float64());
+  schema = arrow::schema({field_dilution});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {dilution_chunks});
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("dilution.csv"));
+  ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
+  ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
+  ARROW_RETURN_NOT_OK(csv_writer->Close());
+  return arrow::Status::OK();
+}
+arrow::Status initial_write_table(double_t *initial, int64_t size) {
+  arrow::DoubleBuilder doublebuilder;
+  ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(initial, size));
+  std::shared_ptr<arrow::Array> initial_arr;
+  ARROW_ASSIGN_OR_RAISE(initial_arr, doublebuilder.Finish());
+  std::shared_ptr<arrow::ChunkedArray> initial_chunks = std::make_shared<arrow::ChunkedArray>(initial_arr);
+  std::shared_ptr<arrow::Field> field_initial;
+  std::shared_ptr<arrow::Schema> schema;
+  field_initial = arrow::field("initial", arrow::float64());
+  schema = arrow::schema({field_initial});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {initial_chunks});
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("initial.csv"));
+  ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
+  ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
+  ARROW_RETURN_NOT_OK(csv_writer->Close());
+  return arrow::Status::OK();
+}
 #pragma region //functor for thrust vector interaction and initial
 struct index_transform
 {
@@ -255,13 +340,13 @@ struct is_diagonal
 
 const size_t num_species = 3; //10
 
-const size_t outerloop = 1000; //200  
+const size_t outerloop = 200; //1000  
 
 const size_t innerloop = 200; //500
 
 const unsigned int threadPerBlock = 1024;
 const unsigned int blockCount = 207520; //the multiply is just larger than 8.5 * 10**8
-const unsigned int totalThreads = threadPerblock * blockCount;
+const unsigned int totalThreads = threadPerBlock * blockCount;
 
 int main( int arc, char* argv[] ) 
 {
@@ -279,6 +364,8 @@ int main( int arc, char* argv[] )
     interaction_host = (double_t *)calloc(nnoSize * deviceCount, sizeof(double_t));
     dilution_host = (double_t *)calloc(oSize * deviceCount, sizeof(double_t));
     initial_host = (double_t *)calloc(noiSize * deviceCount, sizeof(double_t));
+    double_t random = (double_t)rand() / RAND_MAX;
+    double_t growth_mean = 0.1 + 1.4 * random;
     #pragma omp parallel for num_threads(4) private(devStates, growth_rate_dev, sigma_dev, interaction_dev, dilution_dev, initial_dev) shared(totalThreads, blockCount, threadPerBlock, noSize, nnoSize, oSize, noiSize)
     for (int dev=0; dev < deviceCount; ++dev) {
         cudaSetDevice(dev);
@@ -287,19 +374,19 @@ int main( int arc, char* argv[] )
         cudaMemset(growth_rate_dev, 0, noSize * sizeof(double_t));
         cudaMemset(sigma_dev, 0, noSize * sizeof(double_t));
         cudaMalloc((void **)&devStates, totalThreads * sizeof(curandState));
-        initialize_parameters_growth_sigma<<<blockCount, threadPerBlock>>>(devStates, growth_rate_dev, sigma_dev, noSize, dev, 0);
+        initialize_parameters_growth_sigma<<<blockCount, threadPerBlock>>>(devStates, growth_rate_dev, sigma_dev, noSize, dev, 0, growth_mean);
         cudaMemcpy(growth_rate_host + dev * noSize, growth_rate_dev, noSize * sizeof(double_t), cudaMemcpyDeviceToHost);
         cudaMemcpy(sigma_host + dev * noSize, sigma_dev, noSize * sizeof(double_t), cudaMemcpyDeviceToHost);
         cudaFree(growth_rate_host);
-        cudaFree(simga_host);
-        cudaMalloc((void **)interaction_dev, nnoSize * sizeof(double_t));
+        cudaFree(sigma_host);
+        cudaMalloc((void **)&interaction_dev, nnoSize * sizeof(double_t));
         cudaMemset(interaction_dev, 0, nnoSize * sizeof(double_t));
         initialize_parameters_interaction<<<blockCount, threadPerBlock>>>(devStates, interaction_dev, nnoSize, dev, 1);
         cudaMemcpy(interaction_host + dev * nnoSize, interaction_dev, nnoSize * sizeof(double_t), cudaMemcpyDeviceToHost);
         cudaFree(interaction_dev);
-        cudaMalloc((void **)dilution_dev, oSize * sizeof(double_t));
+        cudaMalloc((void **)&dilution_dev, oSize * sizeof(double_t));
         cudaMemset(dilution_dev, 0, oSize * sizeof(double_t));
-        initialize_parameters_dilution<<<blockCount, threadPerBlock>>>(devStates, dilution_dev, oSize, dev, 2);
+        initialize_parameters_dilution<<<blockCount, threadPerBlock>>>(devStates, dilution_dev, oSize, dev, 2, growth_mean);
         cudaMemcpy(dilution_host + dev * oSize, dilution_dev, oSize * sizeof(double_t), cudaMemcpyDeviceToHost);
         cudaFree(dilution_dev);
         cudaMalloc((void **)&initial_dev, noiSize * sizeof(double_t));
@@ -308,12 +395,13 @@ int main( int arc, char* argv[] )
         cudaMemcpy(initial_host + dev * noiSize, initial_dev, noiSize * sizeof(double_t), cudaMemcpyDeviceToHost);
         cudaFree(initial_dev);
     }
-    state_type growth_rate(growth_rate_host, grothrate_host +  noSize * deviceCount);
+    state_type growth_rate(growth_rate_host, growth_rate_host +  noSize * deviceCount);
     state_type Sigma(sigma_host, sigma_host + noSize * deviceCount);
     free(growth_rate_host);
     free(sigma_host);
     state_type interaction(interaction_host, interaction_host +  nnoSize * deviceCount);
     free(interaction_host);
+    size_t dim = interaction.size();
     thrust::host_vector<size_t> index_host(dim);
     thrust::sequence(index_host.begin(), index_host.end(), 1);
     thrust::for_each(index_host.begin(), index_host.end(), index_transform(num_species));
@@ -329,15 +417,29 @@ int main( int arc, char* argv[] )
     free(dilution_host);
     state_type initial(initial_host, initial_host +  noiSize * deviceCount);
     free(initial_host);
-    for (int i = 0; i < innerloop * outerloop; ++i ) {
-        double_t sum = thrust::reduce(initial.begin() + i * num_species, initial.begin() + (i + 1) * num_species, 0);
+    for (int i = 0; i < innerloop * outerloop - 1; ++i ) {
+        double_t sum = thrust::reduce(initial.begin() + i * num_species, initial.begin() + (i + 1) * num_species, 0.0);
         thrust::for_each(initial.begin() + i * num_species, initial.begin() + (i + 1) * num_species, normalize(sum));
     }
 
-    typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
-    generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate/*no*/, Sigma/*no*/, interaction/*nno*/, dilution/*i*/);
+    int64_t size = growth_rate.size();
+    double_t *raw_growth_rate = thrust::raw_pointer_cast(growth_rate.data());
+    double_t *raw_sigma = thrust::raw_pointer_cast(Sigma.data());
+    growth_rate_sigma_write_table(raw_growth_rate, raw_sigma, size);
+    double_t *raw_interaction = thrust::raw_pointer_cast(interaction.data());
+    size = interaction.size();
+    interaction_write_table(raw_interaction, size);
+    double_t *raw_dilution = thrust::raw_pointer_cast(dilution.data());
+    size = dilution.size();
+    dilution_write_table(raw_dilution, size);
+    size = initial.size();
+    double_t *raw_initial = thrust::raw_pointer_cast(initial.data());
+    initial_write_table(raw_initial, size);
 
-    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 1.0, 0.01);
+    typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
+    generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate/*no*/, Sigma/*no*/, interaction/*nno*/, dilution/*o*/);
+
+    integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100.0, 0.1);
 
     // TODO: parse results with Euclidean distance aka 2-norm
     
