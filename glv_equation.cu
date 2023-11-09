@@ -141,8 +141,8 @@
             interaction_i = interaction_i_scoped;
             state_type dilution_n_scoped(m_dilution.size() * m_num_species);
             for (int i = 0; i < m_outerloop; ++i) {
-                for (int j = 0; j < m_num_species; +=j) {
-                    thrust::copy(m_dilution.begin() + i, m_dilution.begin() + i + 1, dilution_n_scoped.begin() + i * m_num_species + j)
+                for (int j = 0; j < m_num_species; ++j) {
+                    thrust::copy(m_dilution.begin() + i, m_dilution.begin() + i + 1, dilution_n_scoped.begin() + i * m_num_species + j);
                 }
             }
             state_type dilution_ni_scoped(dilution_n_scoped.size() * m_innerloop);
