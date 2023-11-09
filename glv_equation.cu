@@ -130,20 +130,24 @@
         : m_num_species(num_species), m_innerloop(innerloop), m_outerloop(outerloop), m_growth_rate(growth_rate), m_Sigma(Sigma), m_interaction(interaction), m_dilution(dilution) {
             state_type growth_rate_i_scoped( m_growth_rate.size() * m_innerloop );
             state_type Sigma_i_scoped( m_Sigma.size() * m_innerloop );
-            state_type dilution_i_scoped( m_dilution.size() * m_innerloop );
             state_type interaction_i_scoped( m_interaction.size() * m_innerloop );
             for (int i = 0; i < m_innerloop; ++i) {
                 thrust::copy(m_growth_rate.begin(), m_growth_rate.end(), growth_rate_i_scoped.begin() + i * m_growth_rate.size());
                 thrust::copy(m_Sigma.begin(), m_Sigma.end(), Sigma_i_scoped.begin() + i * m_Sigma.size());
-                thrust::copy(m_dilution.begin(), m_dilution.end(), dilution_i_scoped.begin() + i * m_dilution.size());
                 thrust::copy(m_interaction.begin(), m_interaction.end(), interaction_i_scoped.begin() + i * m_interaction.size());
             }
             growth_rate_i = growth_rate_i_scoped;
             Sigma_i = Sigma_i_scoped;
             interaction_i = interaction_i_scoped;
-            state_type dilution_ni_scoped( dilution_i_scoped.size() * m_num_species );
-            for (int i = 0; i < m_num_species; ++i) {
-                thrust::copy(dilution_i_scoped.begin(), dilution_i_scoped.end(), dilution_ni_scoped.begin() + i * dilution_i_scoped.size());
+            state_type dilution_n_scoped(m_dilution.size() * m_num_species);
+            for (int i = 0; i < m_outerloop; ++i) {
+                for (int j = 0; j < m_num_species; +=j) {
+                    thrust::copy(m_dilution.begin() + i, m_dilution.begin() + i + 1, dilution_n_scoped.begin() + i * m_num_species + j)
+                }
+            }
+            state_type dilution_ni_scoped(dilution_n_scoped.size() * m_innerloop);
+            for (int i = 0; i < m_innerloop; ++i) {
+                thrust::copy(dilution_n_scoped.begin(), dilution_n_scoped.end(), dilution_ni_scoped.begin() + i * dilution_n_scoped.size());
             }
             dilution_ni = dilution_ni_scoped;
         }
