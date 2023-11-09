@@ -198,7 +198,7 @@
                     thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.end(), pos_sum.end(), neg_sum.end() ) ),
                     generalized_lotka_volterra_functor()
             );
-
+            
             double_t *raw_y = thrust::raw_pointer_cast(y.data());
             arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop, t);
             if (!status.ok()) {
