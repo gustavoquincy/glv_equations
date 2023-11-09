@@ -185,8 +185,6 @@
                     value_type vec_val = result_host[ i * m_num_species + j ];
                     vec_val > 0 ? pos_sum += vec_val : neg_sum += vec_val;
                 }
-                // std::clog << "print pos_sum: " << pos_sum << std::endl;
-                // std::clog << "print neg_sum: " << neg_sum << std::endl;
                 pos_sum_host[i] = pos_sum;
                 neg_sum_host[i] = neg_sum;
             }
@@ -355,7 +353,7 @@
     const size_t innerloop = 200; //500
 
     const unsigned int threadPerBlock = 1024;
-    const unsigned int blockCount = 207520; //the multiply is just larger than 8.5 * 10**8
+    const unsigned int blockCount = 207520; //the multiplication is just larger than 8.5 * 10**8
     const unsigned int totalThreads = threadPerBlock * blockCount;
 
     int main( int arc, char* argv[] ) 
@@ -371,7 +369,7 @@
         double_t *growth_rate_host, *growth_rate_dev, *sigma_host, *sigma_dev, *interaction_host, *interaction_dev, *dilution_host, *dilution_dev, *initial_host, *initial_dev;
         growth_rate_host = (double_t *)calloc(noSize * deviceCount, sizeof(double_t));
         sigma_host = (double_t *)calloc(noSize * deviceCount, sizeof(double_t));
-        //interaction_host = (double_t *)calloc(nnoSize * deviceCount, sizeof(double_t));
+        interaction_host = (double_t *)calloc(nnoSize * deviceCount, sizeof(double_t));
         dilution_host = (double_t *)calloc(oSize * deviceCount, sizeof(double_t));
         initial_host = (double_t *)calloc(noiSize * deviceCount, sizeof(double_t));
         double_t random = (double_t)rand() / RAND_MAX;
@@ -389,13 +387,11 @@
             cudaMemcpy(sigma_host + dev * noSize, sigma_dev, noSize * sizeof(double_t), cudaMemcpyDeviceToHost);
             cudaFree(growth_rate_host);
             cudaFree(sigma_host);
-            /*
             cudaMalloc((void **)&interaction_dev, nnoSize * sizeof(double_t));
             cudaMemset(interaction_dev, 0, nnoSize * sizeof(double_t));
             initialize_parameters_interaction<<<blockCount, threadPerBlock>>>(devStates, interaction_dev, nnoSize, dev, 1);
             cudaMemcpy(interaction_host + dev * nnoSize, interaction_dev, nnoSize * sizeof(double_t), cudaMemcpyDeviceToHost);
             cudaFree(interaction_dev);
-            */
             cudaMalloc((void **)&dilution_dev, oSize * sizeof(double_t));
             cudaMemset(dilution_dev, 0, oSize * sizeof(double_t));
             initialize_parameters_dilution<<<blockCount, threadPerBlock>>>(devStates, dilution_dev, oSize, dev, 2, growth_mean);
@@ -411,11 +407,8 @@
         state_type Sigma(sigma_host, sigma_host + noSize * deviceCount);
         free(growth_rate_host);
         free(sigma_host);
-        /*
         state_type interaction(interaction_host, interaction_host +  nnoSize * deviceCount);
         free(interaction_host);
-        */
-        state_type interaction(nnoSize * deviceCount);
         size_t dim = interaction.size();
         thrust::host_vector<size_t> index_host(dim);
         thrust::sequence(index_host.begin(), index_host.end(), 1);
