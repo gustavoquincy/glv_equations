@@ -89,7 +89,7 @@
     }
     #pragma endregion
 
-    arrow::Status state_write_table(double_t *state, int n, int o, int i, double_t time) {
+    arrow::Status state_write_table(double_t *state, int n, int o, int i) {
         arrow::DoubleBuilder doublebuilder;
         ARROW_RETURN_NOT_OK(doublebuilder.AppendNulls(n * i)); // ni, the column length of the table
         ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Array> arr_null, doublebuilder.Finish());
@@ -106,11 +106,11 @@
             std::shared_ptr<arrow::ChunkedArray> sys_timesnap_chunks = std::make_shared<arrow::ChunkedArray>(sys_timesnap);
             std::string str = "system_" + std::to_string(j);
             std::shared_ptr<arrow::Field> field = arrow::field(str, arrow::float64());
-            ARROW_ASSIGN_OR_RAISE(state_table, state_table->AddColumn(1, field, sys_timesnap_chunks));
+            ARROW_ASSIGN_OR_RAISE(state_table, state_table->AddColumn(j, field, sys_timesnap_chunks));
         } 
-        ARROW_ASSIGN_OR_RAISE(state_table, state_table->RemoveColumn(0)); // remove the null column, aka the first column
+        ARROW_ASSIGN_OR_RAISE(state_table, state_table->RemoveColumn(o)); // remove the null column, aka the first column
         std::shared_ptr<arrow::io::FileOutputStream> outfile;
-        std::string str = "system_state_at_time_" + std::to_string(time) + ".csv";
+        std::string str = "system_state_at_t_100.csv";
         ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(str));
         ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, state_table->schema()));
         ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*state_table));
@@ -198,40 +198,58 @@
                     thrust::make_zip_iterator( thrust::make_tuple( y.end(), dydt.end(), growth_rate_i.end(), Sigma_i.end(), dilution_ni.end(), pos_sum.end(), neg_sum.end() ) ),
                     generalized_lotka_volterra_functor()
             );
-            
-            double_t *raw_y = thrust::raw_pointer_cast(y.data());
-            arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop, t);
-            if (!status.ok()) {
-                std::clog << status.ToString() << std::endl;
+
+            if (t == 1.0) {
+                double_t *raw_y = thrust::raw_pointer_cast(y.data());
+                arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop);
+                if (!status.ok()) {
+                    std::clog << status.ToString() << std::endl;
+                }
             }
+            
         }
 
     };
 
     #pragma region //write table arrow status
-    arrow::Status growth_rate_sigma_write_table(double_t *growth_rate, double_t *Sigma, int64_t size) {
+    arrow::Status growth_rate_write_table(double_t *growth_rate, int64_t size) {
     arrow::DoubleBuilder doublebuilder;
     ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(growth_rate, size));
     std::shared_ptr<arrow::Array> growth_rate_arr;
     ARROW_ASSIGN_OR_RAISE(growth_rate_arr, doublebuilder.Finish());
     std::shared_ptr<arrow::ChunkedArray> growth_rate_chunks = std::make_shared<arrow::ChunkedArray>(growth_rate_arr);
-    ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(Sigma, size));
-    std::shared_ptr<arrow::Array> sigma_arr;
-    ARROW_ASSIGN_OR_RAISE(sigma_arr, doublebuilder.Finish());
-    std::shared_ptr<arrow::ChunkedArray> sigma_chunks = std::make_shared<arrow::ChunkedArray>(sigma_arr);
-    std::shared_ptr<arrow::Field> field_growth_rate, field_sigma;
+    std::shared_ptr<arrow::Field> field_growth_rate;
     std::shared_ptr<arrow::Schema> schema;
     field_growth_rate = arrow::field("growth rate", arrow::float64());
-    field_sigma = arrow::field("sigma", arrow::float64());
-    schema = arrow::schema({field_growth_rate, field_sigma});
-    std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {growth_rate_chunks, sigma_chunks});
+    schema = arrow::schema({field_growth_rate});
+    std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {growth_rate_chunks});
     std::shared_ptr<arrow::io::FileOutputStream> outfile;
-    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("growth_rate_and_sigma.csv"));
+    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("growth_rate.csv"));
     ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
     ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
     ARROW_RETURN_NOT_OK(csv_writer->Close());
     return arrow::Status::OK();
     }
+
+    arrow::Status sigma_write_table(double_t *Sigma, int64_t size) {
+        arrow::DoubleBuilder doublebuilder;
+        ARROW_RETURN_NOT_OK(doublebuilder.AppendValues(Sigma, size));
+        std::shared_ptr<arrow::Array> sigma_arr;
+        ARROW_ASSIGN_OR_RAISE(sigma_arr, doublebuilder.Finish());
+        std::shared_ptr<arrow::ChunkedArray> sigma_chunks = std::make_shared<arrow::ChunkedArray>(sigma_arr);
+        std::shared_ptr<arrow::Field> field_sigma;
+        std::shared_ptr<arrow::Schema> schema;
+        field_sigma = arrow::field("sigma", arrow::float64());
+        schema = arrow::schema({field_sigma});
+        std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {sigma_chunks});
+        std::shared_ptr<arrow::io::FileOutputStream> outfile;
+        ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("sigma.csv"));
+        ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, table->schema()));
+        ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
+        ARROW_RETURN_NOT_OK(csv_writer->Close());
+        return arrow::Status::OK();
+    }
+    
 
     arrow::Status interaction_write_table(double_t *interaction, int64_t size) {
     arrow::DoubleBuilder doublebuilder;
@@ -348,7 +366,7 @@
 
     const size_t num_species = 3; //10
 
-    const size_t outerloop = 200; //1000  
+    const size_t outerloop = 50000; //1000  
 
     const size_t innerloop = 200; //500
 
@@ -433,24 +451,22 @@
         int64_t size = growth_rate.size();
         double_t *raw_growth_rate = thrust::raw_pointer_cast(growth_rate.data());
         double_t *raw_sigma = thrust::raw_pointer_cast(Sigma.data());
-        growth_rate_sigma_write_table(raw_growth_rate, raw_sigma, size);
+        growth_rate_write_table(raw_growth_rate, size);
+        sigma_write_table(raw_sigma, size);
         double_t *raw_interaction = thrust::raw_pointer_cast(interaction.data());
         size = interaction.size();
         interaction_write_table(raw_interaction, size);
         double_t *raw_dilution = thrust::raw_pointer_cast(dilution.data());
         size = dilution.size();
         dilution_write_table(raw_dilution, size);
-        size = initial.size();
-        double_t *raw_initial = thrust::raw_pointer_cast(initial.data());
-        initial_write_table(raw_initial, size);
+        // size = initial.size();
+        // double_t *raw_initial = thrust::raw_pointer_cast(initial.data());
+        // initial_write_table(raw_initial, size);
 
         typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
         generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate/*no*/, Sigma/*no*/, interaction/*nno*/, dilution/*o*/);
 
-        integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100.0, 0.1);
-
-        // TODO: parse results with Euclidean distance aka 2-norm
-        
+        integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100, 1);
 
         return 0;
     }
