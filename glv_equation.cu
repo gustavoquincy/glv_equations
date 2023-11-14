@@ -466,7 +466,7 @@
         typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
         generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate/*no*/, Sigma/*no*/, interaction/*nno*/, dilution/*o*/);
 
-        integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100, 1);
+        integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100.0, 1.0);
 
         return 0;
     }
