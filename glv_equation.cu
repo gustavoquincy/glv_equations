@@ -62,8 +62,9 @@
             double_t promote_dense = ( 1 -  compete_dense ) * curand_uniform_double(&state[id]);
             double_t compete_width = compete_mean * curand_uniform_double(&state[id]);
             double_t promote_width = promote_mean * curand_uniform_double(&state[id]);
-            (curand_uniform(&state[id]) <= promote_dense) ? 
-                interaction[id] = promote_mean - promote_width + 2 * promote_width * curand_uniform_double(&state[id]) : (curand_uniform(&state[id]) >= compete_dense) ? 
+            double_t picker = curand_uniform(&state[id]);
+            (picker <= promote_dense) ? 
+                interaction[id] = promote_mean - promote_width + 2 * promote_width * curand_uniform_double(&state[id]) : (picker >= compete_dense) ? 
                 interaction[id] = -1 * (compete_mean - compete_width + 2 * compete_width * curand_uniform_double(&state[id])) : 0 ;
         }
     }
@@ -199,14 +200,13 @@
                     generalized_lotka_volterra_functor()
             );
 
-
-            double_t *raw_y = thrust::raw_pointer_cast(y.data());
-            arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop, t);
-            if (!status.ok()) {
-                std::clog << status.ToString() << std::endl;
+            if (t == 100.0) {
+                double_t *raw_y = thrust::raw_pointer_cast(y.data());
+                arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop, t);
+                if (!status.ok()) {
+                    std::clog << status.ToString() << std::endl;
+                }
             }
-
-            
         }
 
     };
@@ -466,7 +466,7 @@
         typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
         generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate/*no*/, Sigma/*no*/, interaction/*nno*/, dilution/*o*/);
 
-        integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100.0, 1.0);
+        integrate_const( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100.0, 1.0);
 
         return 0;
     }

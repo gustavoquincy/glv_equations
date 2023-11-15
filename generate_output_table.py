@@ -6,7 +6,7 @@ import math
 import pandas as pd
 
 def write_o_table(m_num_species, thres):
-	table = pyarrow.csv.read_csv("system_state_at_t_1.0.csv");
+	table = pyarrow.csv.read_csv("system_state_at_t_100.000000.csv");
 	threshold = thres
 	num_species = m_num_species
 	parameters_condition = table.num_columns

@@ -4,7 +4,7 @@ import pyarrow.csv
 import numpy as np
 
 def write_p_table(m_num_species):
-	table = pyarrow.csv.read_csv("system_state_at_t_1.0.csv");
+	table = pyarrow.csv.read_csv("system_state_at_t_100.000000.csv");
 	interaction_table = pyarrow.csv.read_csv("interaction.csv");
 	num_species = m_num_species;
 	interaction_output = pd.DataFrame(columns=[f'interaction{i}' for i in range(num_species*num_species)]);
