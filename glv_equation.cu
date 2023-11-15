@@ -57,7 +57,7 @@
         if (id < sampleSize) {
             // n2o dim 10**8
             double_t compete_mean = 0.5 + 1.5 * curand_uniform_double(&state[id]);
-            double_t compete_dense = 0.5 + 0.5 * curand_uniform_double(&state[id]);
+            double_t compete_dense = 0.8 + 0.2 * curand_uniform_double(&state[id]);
             double_t promote_mean = 0.01 + 0.99 * curand_uniform_double(&state[id]);
             double_t promote_dense = ( 1 -  compete_dense ) * curand_uniform_double(&state[id]);
             double_t compete_width = compete_mean * curand_uniform_double(&state[id]);
@@ -89,7 +89,7 @@
     }
     #pragma endregion
 
-    arrow::Status state_write_table(double_t *state, int n, int o, int i) {
+    arrow::Status state_write_table(double_t *state, int n, int o, int i, double_t t) {
         arrow::DoubleBuilder doublebuilder;
         ARROW_RETURN_NOT_OK(doublebuilder.AppendNulls(n * i)); // ni, the column length of the table
         ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Array> arr_null, doublebuilder.Finish());
@@ -110,7 +110,7 @@
         } 
         ARROW_ASSIGN_OR_RAISE(state_table, state_table->RemoveColumn(o)); // remove the null column, aka the first column
         std::shared_ptr<arrow::io::FileOutputStream> outfile;
-        std::string str = "system_state_at_t_100.csv";
+        std::string str = "system_state_at_t_" + std::to_string(t)  + ".csv";
         ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(str));
         ARROW_ASSIGN_OR_RAISE(auto csv_writer, arrow::csv::MakeCSVWriter(outfile, state_table->schema()));
         ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*state_table));
@@ -158,7 +158,7 @@
             __host__ __device__
             void operator()( Tuple t )/* tuple t = { y, dydt, growth_rate, Sigma, dilution, pos_sum, neg_sum } (arity = 7)*/
             {   
-                thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + thrust::get<6>(t) + 0.0 * thrust::get<3>(t) * thrust::get<5>(t) / ( 1 + thrust::get<5>(t) )) - thrust::get<4>(t) * thrust::get<0>(t);
+                thrust::get<1>(t) = thrust::get<0>(t) * thrust::get<2>(t) * ( 1 + thrust::get<6>(t) + thrust::get<3>(t) * thrust::get<5>(t) / ( 1 + thrust::get<5>(t) )) - thrust::get<4>(t) * thrust::get<0>(t);
             }
         };
 
@@ -199,13 +199,13 @@
                     generalized_lotka_volterra_functor()
             );
 
-            if (t == 1.0) {
-                double_t *raw_y = thrust::raw_pointer_cast(y.data());
-                arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop);
-                if (!status.ok()) {
-                    std::clog << status.ToString() << std::endl;
-                }
+
+            double_t *raw_y = thrust::raw_pointer_cast(y.data());
+            arrow::Status status = state_write_table(raw_y, m_num_species, m_outerloop, m_innerloop, t);
+            if (!status.ok()) {
+                std::clog << status.ToString() << std::endl;
             }
+
             
         }
 
@@ -366,7 +366,7 @@
 
     const size_t num_species = 3; //10
 
-    const size_t outerloop = 50000; //1000  
+    const size_t outerloop = 200; //1000  
 
     const size_t innerloop = 200; //500
 
@@ -459,9 +459,9 @@
         double_t *raw_dilution = thrust::raw_pointer_cast(dilution.data());
         size = dilution.size();
         dilution_write_table(raw_dilution, size);
-        // size = initial.size();
-        // double_t *raw_initial = thrust::raw_pointer_cast(initial.data());
-        // initial_write_table(raw_initial, size);
+        size = initial.size();
+        double_t *raw_initial = thrust::raw_pointer_cast(initial.data());
+        initial_write_table(raw_initial, size);
 
         typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
         generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate/*no*/, Sigma/*no*/, interaction/*nno*/, dilution/*o*/);
