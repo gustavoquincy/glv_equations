@@ -64,7 +64,7 @@
             double_t promote_width = promote_mean * curand_uniform_double(&state[id]);
             double_t picker = curand_uniform(&state[id]);
             (picker <= promote_dense) ? 
-                interaction[id] = promote_mean - promote_width + 2 * promote_width * curand_uniform_double(&state[id]) : (picker >= compete_dense) ? 
+                interaction[id] = promote_mean - promote_width + 2 * promote_width * curand_uniform_double(&state[id]) : (picker >= 1 - compete_dense) ? 
                 interaction[id] = -1 * (compete_mean - compete_width + 2 * compete_width * curand_uniform_double(&state[id])) : 0 ;
         }
     }
@@ -364,7 +364,7 @@
     };
     #pragma endregion
 
-    const size_t num_species = 3; //10
+    const size_t num_species = 10; //10
 
     const size_t outerloop = 200; //1000  
 
@@ -378,6 +378,9 @@
     {
         int deviceCount;
         cudaGetDeviceCount(&deviceCount);
+        std::cout << "number of species: " << num_species << std::endl; 
+        std::cout << "number of systems: " << outerloop << std::endl;
+        std::cout << "number of precisions: " << innerloop << std::endl;
 
         int noSize = num_species * outerloop / deviceCount;
         int nnoSize = num_species * num_species * outerloop / deviceCount;
@@ -465,8 +468,22 @@
 
         typedef runge_kutta_dopri5< state_type , value_type , state_type , value_type > stepper_type;
         generalized_lotka_volterra_system glv_system( num_species, innerloop, outerloop, growth_rate/*no*/, Sigma/*no*/, interaction/*nno*/, dilution/*o*/);
+        
+        double_t t0 = 0.0;
+        double_t t1 = 100.0;
+        double_t dt = 1.0;
+        std::cout << "t0: " << t0 << std::endl;
+        std::cout << "t1: " << t1 << std::endl;
+        std::cout << "dt: " << dt << std::endl;
 
-        integrate_const( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , 0.0, 100.0, 1.0);
+        #pragma omp parallel num_threads(4) shared(glv_system, initial, t0, t1, dt)
+        {
+            #pragma omp single
+            #pragma omp taskgroup
+            {
+                integrate_adaptive( make_dense_output(1.0e-6, 1.0e-6, stepper_type() ), glv_system, initial/*noi*/ , t0, t1, dt);
+            }
+        }
 
         return 0;
     }
